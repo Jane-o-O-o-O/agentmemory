@@ -229,3 +229,34 @@ class TestTestHybridMemory:
         result1 = process(self.fixture, config=self.config)
         result2 = process(self.fixture, config=self.config)
         assert result1 == result2
+
+# [2026-04-09] Tests for test_hybrid_memory
+class TestTestHybridMemory:
+    """Test suite for test_hybrid_memory — persistence layer abstraction."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_persistence_layer_abstraction(self):
+        """Test basic persistence layer abstraction functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_persistence_layer_abstraction_with_empty_input(self):
+        """Test persistence layer abstraction with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_persistence_layer_abstraction_error_handling(self):
+        """Test persistence layer abstraction error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_persistence_layer_abstraction_caching(self):
+        """Test persistence layer abstraction caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
