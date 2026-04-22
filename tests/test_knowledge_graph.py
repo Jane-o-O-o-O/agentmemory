@@ -253,3 +253,34 @@ class TestKnowledgeGraph:
         kg = KnowledgeGraph()
         assert kg.entity_count() == 0
         assert kg.relation_count() == 0
+
+# [2026-04-22] Tests for test_knowledge_graph
+class TestTestKnowledgeGraph:
+    """Test suite for test_knowledge_graph — streaming search results."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_streaming_search_results(self):
+        """Test basic streaming search results functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_streaming_search_results_with_empty_input(self):
+        """Test streaming search results with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_streaming_search_results_error_handling(self):
+        """Test streaming search results error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_streaming_search_results_caching(self):
+        """Test streaming search results caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
