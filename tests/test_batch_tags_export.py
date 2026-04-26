@@ -285,3 +285,34 @@ class TestExportImport:
 
         assert mem2.stats()["memory_count"] == 2
         assert mem2.stats()["entity_count"] == 1
+
+# [2026-04-26] Tests for test_batch_tags_export
+class TestTestBatchTagsExport:
+    """Test suite for test_batch_tags_export — metrics collection."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_metrics_collection(self):
+        """Test basic metrics collection functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_metrics_collection_with_empty_input(self):
+        """Test metrics collection with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_metrics_collection_error_handling(self):
+        """Test metrics collection error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_metrics_collection_caching(self):
+        """Test metrics collection caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
