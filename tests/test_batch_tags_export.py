@@ -409,3 +409,34 @@ class TestTestBatchTagsExport:
         result1 = process(self.fixture, config=self.config)
         result2 = process(self.fixture, config=self.config)
         assert result1 == result2
+
+# [2026-04-29] Tests for test_batch_tags_export
+class TestTestBatchTagsExport:
+    """Test suite for test_batch_tags_export — middleware chain."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_middleware_chain(self):
+        """Test basic middleware chain functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_middleware_chain_with_empty_input(self):
+        """Test middleware chain with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_middleware_chain_error_handling(self):
+        """Test middleware chain error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_middleware_chain_caching(self):
+        """Test middleware chain caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
