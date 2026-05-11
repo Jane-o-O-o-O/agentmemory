@@ -16,17 +16,75 @@ class HybridMemory:
 
     Args:
         dimension: 向量维度
+        storage_path: 持久化存储路径（目录或文件），None 表示不持久化
+        storage_backend: 存储后端类型，'json' 或 'sqlite'
+        auto_save: 每次 remember/forget 后自动保存
+        auto_load: 初始化时自动加载已有数据
     """
 
-    def __init__(self, dimension: int) -> None:
+    def __init__(
+        self,
+        dimension: int,
+        storage_path: Optional[str] = None,
+        storage_backend: str = "json",
+        auto_save: bool = False,
+        auto_load: bool = False,
+    ) -> None:
         self._dimension = dimension
         self.embedding_store = EmbeddingStore(dimension=dimension)
         self.knowledge_graph = KnowledgeGraph()
+        self._storage_path = storage_path
+        self._storage_backend = storage_backend
+        self._auto_save = auto_save
+        self._backend = self._create_backend() if storage_path else None
+
+        if auto_load and self._backend:
+            self.load()
+
+    def _create_backend(self) -> Any:
+        """创建持久化后端实例"""
+        from agentmemory.persistence import JSONBackend, SQLiteBackend
+
+        if self._storage_backend == "json":
+            return JSONBackend(self._storage_path)
+        elif self._storage_backend == "sqlite":
+            return SQLiteBackend(self._storage_path)
+        else:
+            raise ValueError(f"不支持的存储后端: {self._storage_backend}")
 
     @property
     def dimension(self) -> int:
         """向量维度"""
         return self._dimension
+
+    # --- 持久化 ---
+
+    def save(self) -> None:
+        """保存当前数据到磁盘。
+
+        Raises:
+            ValueError: 未配置 storage_path
+        """
+        if self._backend is None:
+            raise ValueError("未配置 storage_path，无法保存")
+        self._backend.save_embedding_store(self.embedding_store)
+        self._backend.save_knowledge_graph(self.knowledge_graph)
+
+    def load(self) -> None:
+        """从磁盘加载数据。
+
+        Raises:
+            ValueError: 未配置 storage_path
+        """
+        if self._backend is None:
+            raise ValueError("未配置 storage_path，无法加载")
+        self._backend.load_embedding_store(self.embedding_store)
+        self._backend.load_knowledge_graph(self.knowledge_graph)
+
+    def _auto_save_if_enabled(self) -> None:
+        """如果启用了自动保存，则执行保存"""
+        if self._auto_save and self._backend:
+            self.save()
 
     # --- 记忆管理 ---
 
@@ -51,6 +109,7 @@ class HybridMemory:
         """
         mem = Memory(content=content, embedding=embedding, metadata=metadata or {})
         self.embedding_store.add(mem)
+        self._auto_save_if_enabled()
         return mem
 
     def forget(self, memory_id: str) -> None:
@@ -63,6 +122,26 @@ class HybridMemory:
             KeyError: 记忆不存在
         """
         self.embedding_store.remove(memory_id)
+        self._auto_save_if_enabled()
+
+    def list_all(self) -> list[Memory]:
+        """返回所有记忆列表。
+
+        Returns:
+            所有 Memory 对象的列表
+        """
+        return self.embedding_store.list_all()
+
+    def get_memory(self, memory_id: str) -> Optional[Memory]:
+        """根据 ID 获取记忆。
+
+        Args:
+            memory_id: 记忆 ID
+
+        Returns:
+            对应的 Memory，不存在返回 None
+        """
+        return self.embedding_store.get(memory_id)
 
     # --- 知识图谱管理 ---
 
@@ -84,6 +163,7 @@ class HybridMemory:
         """
         entity = Entity(name=name, entity_type=entity_type, properties=properties or {})
         self.knowledge_graph.add_entity(entity)
+        self._auto_save_if_enabled()
         return entity
 
     def add_relation(
@@ -111,6 +191,7 @@ class HybridMemory:
             weight=weight,
         )
         self.knowledge_graph.add_relation(relation)
+        self._auto_save_if_enabled()
         return relation
 
     def get_neighbors(
