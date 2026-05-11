@@ -126,7 +126,8 @@ class SQLiteBackend:
                 content TEXT NOT NULL,
                 created_at REAL NOT NULL,
                 metadata TEXT NOT NULL DEFAULT '{}',
-                embedding TEXT
+                embedding TEXT,
+                tags TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS entities (
                 id TEXT PRIMARY KEY,
@@ -160,8 +161,8 @@ class SQLiteBackend:
             for mem in store.list_all():
                 embedding_json = json.dumps(mem.embedding) if mem.embedding else None
                 conn.execute(
-                    "INSERT INTO memories (id, content, created_at, metadata, embedding) VALUES (?, ?, ?, ?, ?)",
-                    (mem.id, mem.content, mem.created_at, json.dumps(mem.metadata, ensure_ascii=False), embedding_json),
+                    "INSERT INTO memories (id, content, created_at, metadata, embedding, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                    (mem.id, mem.content, mem.created_at, json.dumps(mem.metadata, ensure_ascii=False), embedding_json, json.dumps(mem.tags, ensure_ascii=False)),
                 )
             conn.commit()
         finally:
@@ -185,7 +186,7 @@ class SQLiteBackend:
             if cursor.fetchone() is None:
                 return
 
-            cursor = conn.execute("SELECT id, content, created_at, metadata, embedding FROM memories")
+            cursor = conn.execute("SELECT id, content, created_at, metadata, embedding, tags FROM memories")
             for row in cursor:
                 mem = Memory(
                     id=row[0],
@@ -193,6 +194,7 @@ class SQLiteBackend:
                     created_at=row[2],
                     metadata=json.loads(row[3]),
                     embedding=json.loads(row[4]) if row[4] else None,
+                    tags=json.loads(row[5]) if row[5] else [],
                 )
                 store.add(mem)
         finally:

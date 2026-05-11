@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import json
+from io import StringIO
 from typing import Any, Optional
 
 from agentmemory.models import Entity, Memory, Relation, SearchResult
@@ -14,6 +17,7 @@ class HybridMemory:
     """混合记忆系统，结合向量搜索与知识图谱。
 
     提供统一的记忆存储、检索和知识关联 API。
+    支持批量操作、标签过滤、数据导出/导入。
 
     Args:
         dimension: 向量维度。如果提供 embedding_provider，可以从 provider 自动推断。
@@ -111,6 +115,7 @@ class HybridMemory:
         content: str,
         embedding: Optional[list[float]] = None,
         metadata: Optional[dict[str, Any]] = None,
+        tags: Optional[list[str]] = None,
     ) -> Memory:
         """添加一条记忆到存储。
 
@@ -121,6 +126,7 @@ class HybridMemory:
             content: 文本内容
             embedding: 向量表示（可选，有 provider 时自动计算）
             metadata: 附加元数据
+            tags: 标签列表
 
         Returns:
             创建的 Memory 对象
@@ -130,10 +136,47 @@ class HybridMemory:
         """
         if embedding is None and self._embedding_provider is not None:
             embedding = self._embedding_provider.embed(content)
-        mem = Memory(content=content, embedding=embedding, metadata=metadata or {})
+        mem = Memory(content=content, embedding=embedding, metadata=metadata or {}, tags=tags or [])
         self.embedding_store.add(mem)
         self._auto_save_if_enabled()
         return mem
+
+    def batch_remember(
+        self,
+        contents: list[str],
+        embeddings: Optional[list[list[float]]] = None,
+        metadatas: Optional[list[dict[str, Any]]] = None,
+        tagss: Optional[list[list[str]]] = None,
+    ) -> list[Memory]:
+        """批量添加记忆。
+
+        Args:
+            contents: 文本内容列表
+            embeddings: 向量列表（可选，有 provider 时自动计算）
+            metadatas: 元数据列表（可选）
+            tagss: 标签列表的列表（可选）
+
+        Returns:
+            创建的 Memory 对象列表
+
+        Raises:
+            ValueError: 列表长度不一致或缺少 embedding 和 provider
+        """
+        n = len(contents)
+        if embeddings is not None and len(embeddings) != n:
+            raise ValueError(f"contents 长度 {n} 与 embeddings 长度 {len(embeddings)} 不一致")
+        if metadatas is not None and len(metadatas) != n:
+            raise ValueError(f"contents 长度 {n} 与 metadatas 长度 {len(metadatas)} 不一致")
+        if tagss is not None and len(tagss) != n:
+            raise ValueError(f"contents 长度 {n} 与 tagss 长度 {len(tagss)} 不一致")
+
+        memories: list[Memory] = []
+        for i, content in enumerate(contents):
+            emb = embeddings[i] if embeddings else None
+            meta = metadatas[i] if metadatas else None
+            tags = tagss[i] if tagss else None
+            memories.append(self.remember(content, embedding=emb, metadata=meta, tags=tags))
+        return memories
 
     def forget(self, memory_id: str) -> None:
         """删除一条记忆。
@@ -146,6 +189,26 @@ class HybridMemory:
         """
         self.embedding_store.remove(memory_id)
         self._auto_save_if_enabled()
+
+    def batch_forget(self, memory_ids: list[str]) -> list[str]:
+        """批量删除记忆。
+
+        Args:
+            memory_ids: 记忆 ID 列表
+
+        Returns:
+            成功删除的 ID 列表
+        """
+        deleted: list[str] = []
+        for mid in memory_ids:
+            try:
+                self.embedding_store.remove(mid)
+                deleted.append(mid)
+            except KeyError:
+                pass
+        if deleted:
+            self._auto_save_if_enabled()
+        return deleted
 
     def list_all(self) -> list[Memory]:
         """返回所有记忆列表。
@@ -165,6 +228,50 @@ class HybridMemory:
             对应的 Memory，不存在返回 None
         """
         return self.embedding_store.get(memory_id)
+
+    # --- 标签管理 ---
+
+    def add_tag(self, memory_id: str, tag: str) -> None:
+        """为记忆添加标签。
+
+        Args:
+            memory_id: 记忆 ID
+            tag: 标签名称
+
+        Raises:
+            KeyError: 记忆不存在
+        """
+        mem = self.embedding_store.get(memory_id)
+        if mem is None:
+            raise KeyError(f"Memory {memory_id} 不存在")
+        if not mem.has_tag(tag):
+            mem.tags.append(tag)
+        self._auto_save_if_enabled()
+
+    def remove_tag(self, memory_id: str, tag: str) -> None:
+        """移除记忆的标签。
+
+        Args:
+            memory_id: 记忆 ID
+            tag: 标签名称
+
+        Raises:
+            KeyError: 记忆不存在
+        """
+        mem = self.embedding_store.get(memory_id)
+        if mem is None:
+            raise KeyError(f"Memory {memory_id} 不存在")
+        # 不区分大小写移除
+        mem.tags = [t for t in mem.tags if t.lower() != tag.lower()]
+        self._auto_save_if_enabled()
+
+    def get_all_tags(self) -> dict[str, int]:
+        """获取所有标签及其使用次数。
+
+        Returns:
+            标签名称到使用次数的映射
+        """
+        return self.embedding_store.get_all_tags()
 
     # --- 知识图谱管理 ---
 
@@ -240,13 +347,15 @@ class HybridMemory:
         query_embedding: list[float],
         top_k: int = 5,
         threshold: float = 0.0,
+        tags: Optional[list[str]] = None,
     ) -> list[SearchResult]:
-        """纯向量相似度搜索。
+        """纯向量相似度搜索，支持标签过滤。
 
         Args:
             query_embedding: 查询向量
             top_k: 返回前 k 个结果
             threshold: 相似度阈值
+            tags: 标签过滤列表（AND 逻辑）
 
         Returns:
             按相似度降序排列的 SearchResult 列表
@@ -255,7 +364,31 @@ class HybridMemory:
             query=query_embedding,
             top_k=top_k,
             threshold=threshold,
+            tags=tags,
         )
+
+    def batch_search(
+        self,
+        query_embeddings: list[list[float]],
+        top_k: int = 5,
+        threshold: float = 0.0,
+        tags: Optional[list[str]] = None,
+    ) -> list[list[SearchResult]]:
+        """批量向量搜索。
+
+        Args:
+            query_embeddings: 查询向量列表
+            top_k: 每个查询返回前 k 个结果
+            threshold: 相似度阈值
+            tags: 标签过滤列表
+
+        Returns:
+            每个查询对应的 SearchResult 列表
+        """
+        return [
+            self.search(emb, top_k=top_k, threshold=threshold, tags=tags)
+            for emb in query_embeddings
+        ]
 
     def hybrid_search(
         self,
@@ -263,6 +396,7 @@ class HybridMemory:
         top_k: int = 5,
         threshold: float = 0.0,
         graph_depth: int = 1,
+        tags: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """混合搜索：结合向量相似度 + 知识图谱上下文。
 
@@ -275,6 +409,7 @@ class HybridMemory:
             top_k: 返回前 k 个结果
             threshold: 相似度阈值
             graph_depth: 图谱遍历深度（0 表示不使用图谱）
+            tags: 标签过滤列表
 
         Returns:
             带有图谱上下文的 SearchResult 列表
@@ -284,6 +419,7 @@ class HybridMemory:
             query=query_embedding,
             top_k=top_k,
             threshold=threshold,
+            tags=tags,
         )
 
         if graph_depth <= 0 or len(results) == 0:
@@ -342,6 +478,7 @@ class HybridMemory:
         query: str,
         top_k: int = 5,
         threshold: float = 0.0,
+        tags: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """文本相似度搜索（需要 embedding_provider）。
 
@@ -351,6 +488,7 @@ class HybridMemory:
             query: 查询文本
             top_k: 返回前 k 个结果
             threshold: 相似度阈值
+            tags: 标签过滤列表
 
         Returns:
             按相似度降序排列的 SearchResult 列表
@@ -368,6 +506,7 @@ class HybridMemory:
             query_embedding=query_embedding,
             top_k=top_k,
             threshold=threshold,
+            tags=tags,
         )
 
     def hybrid_search_text(
@@ -376,6 +515,7 @@ class HybridMemory:
         top_k: int = 5,
         threshold: float = 0.0,
         graph_depth: int = 1,
+        tags: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """文本混合搜索（需要 embedding_provider）。
 
@@ -386,6 +526,7 @@ class HybridMemory:
             top_k: 返回前 k 个结果
             threshold: 相似度阈值
             graph_depth: 图谱遍历深度
+            tags: 标签过滤列表
 
         Returns:
             带有图谱上下文的 SearchResult 列表
@@ -404,6 +545,7 @@ class HybridMemory:
             top_k=top_k,
             threshold=threshold,
             graph_depth=graph_depth,
+            tags=tags,
         )
 
     # --- 统计 ---
@@ -419,3 +561,125 @@ class HybridMemory:
             "entity_count": self.knowledge_graph.entity_count(),
             "relation_count": self.knowledge_graph.relation_count(),
         }
+
+    # --- 导出/导入 ---
+
+    def export_json(self, pretty: bool = True) -> str:
+        """将所有数据导出为 JSON 字符串。
+
+        Args:
+            pretty: 是否格式化输出
+
+        Returns:
+            JSON 字符串
+        """
+        data = {
+            "version": "1.0",
+            "stats": self.stats(),
+            "memories": [m.to_dict() for m in self.embedding_store.list_all()],
+            "entities": [e.to_dict() for e in self.knowledge_graph.find_entities()],
+            "relations": [r.to_dict() for r in self.knowledge_graph.find_relations()],
+        }
+        indent = 2 if pretty else None
+        return json.dumps(data, ensure_ascii=False, indent=indent)
+
+    def import_json(self, json_str: str, overwrite: bool = False) -> dict[str, int]:
+        """从 JSON 字符串导入数据。
+
+        Args:
+            json_str: JSON 字符串
+            overwrite: 是否清空现有数据后导入
+
+        Returns:
+            导入统计 {"memories": N, "entities": N, "relations": N}
+        """
+        data = json.loads(json_str)
+
+        if overwrite:
+            self.embedding_store = EmbeddingStore(dimension=self._dimension)
+            self.knowledge_graph = KnowledgeGraph()
+
+        counts = {"memories": 0, "entities": 0, "relations": 0}
+
+        # 先导入实体
+        for entity_data in data.get("entities", []):
+            try:
+                entity = Entity.from_dict(entity_data)
+                self.knowledge_graph.add_entity(entity)
+                counts["entities"] += 1
+            except ValueError:
+                pass  # 重复实体跳过
+
+        # 导入关系
+        for rel_data in data.get("relations", []):
+            try:
+                relation = Relation.from_dict(rel_data)
+                self.knowledge_graph.add_relation(relation)
+                counts["relations"] += 1
+            except ValueError:
+                pass  # 无效关系跳过
+
+        # 导入记忆
+        for mem_data in data.get("memories", []):
+            try:
+                mem = Memory.from_dict(mem_data)
+                self.embedding_store.add(mem)
+                counts["memories"] += 1
+            except ValueError:
+                pass  # 无效记忆跳过
+
+        self._auto_save_if_enabled()
+        return counts
+
+    def export_csv(self) -> str:
+        """将记忆数据导出为 CSV 字符串。
+
+        Returns:
+            CSV 格式字符串（包含 id, content, created_at, metadata, tags 列）
+        """
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "content", "created_at", "metadata", "tags"])
+        for mem in self.embedding_store.list_all():
+            writer.writerow([
+                mem.id,
+                mem.content,
+                mem.created_at,
+                json.dumps(mem.metadata, ensure_ascii=False),
+                json.dumps(mem.tags, ensure_ascii=False),
+            ])
+        return output.getvalue()
+
+    def import_csv(self, csv_str: str) -> int:
+        """从 CSV 字符串导入记忆数据。
+
+        CSV 中不包含向量，如果有 embedding_provider 会自动计算。
+
+        Args:
+            csv_str: CSV 格式字符串
+
+        Returns:
+            成功导入的记忆数量
+        """
+        reader = csv.DictReader(StringIO(csv_str))
+        count = 0
+        for row in reader:
+            try:
+                tags = json.loads(row.get("tags", "[]"))
+                embedding = None
+                if self._embedding_provider is not None:
+                    embedding = self._embedding_provider.embed(row["content"])
+                mem = Memory(
+                    id=row["id"],
+                    content=row["content"],
+                    created_at=float(row["created_at"]),
+                    metadata=json.loads(row.get("metadata", "{}")),
+                    tags=tags,
+                    embedding=embedding,
+                )
+                self.embedding_store.add(mem)
+                count += 1
+            except (ValueError, KeyError):
+                pass
+        self._auto_save_if_enabled()
+        return count

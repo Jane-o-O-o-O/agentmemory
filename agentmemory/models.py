@@ -23,6 +23,7 @@ class Memory:
         created_at: 创建时间戳
         metadata: 附加元数据
         embedding: 向量表示（可选）
+        tags: 标签列表，用于分类和过滤
     """
 
     content: str
@@ -30,10 +31,25 @@ class Memory:
     created_at: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
     embedding: Optional[list[float]] = None
+    tags: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.content:
             raise ValueError("content 不能为空")
+        # 确保标签去重
+        if self.tags:
+            self.tags = list(dict.fromkeys(self.tags))
+
+    def has_tag(self, tag: str) -> bool:
+        """检查是否包含指定标签。
+
+        Args:
+            tag: 标签名称（不区分大小写）
+
+        Returns:
+            是否包含该标签
+        """
+        return tag.lower() in [t.lower() for t in self.tags]
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 dict"""
@@ -43,6 +59,7 @@ class Memory:
             "created_at": self.created_at,
             "metadata": self.metadata,
             "embedding": self.embedding,
+            "tags": self.tags,
         }
 
     @classmethod
@@ -54,13 +71,15 @@ class Memory:
             created_at=data["created_at"],
             metadata=data.get("metadata", {}),
             embedding=data.get("embedding"),
+            tags=data.get("tags", []),
         )
 
     def __str__(self) -> str:
         preview = self.content[:50]
         if len(self.content) > 50:
             preview += "..."
-        return f"Memory(id={self.id[:8]}, content={preview!r})"
+        tag_str = f", tags={self.tags}" if self.tags else ""
+        return f"Memory(id={self.id[:8]}, content={preview!r}{tag_str})"
 
 
 @dataclass
