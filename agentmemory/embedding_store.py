@@ -104,13 +104,15 @@ class EmbeddingStore:
         query: list[float],
         top_k: int = 5,
         threshold: float = 0.0,
+        tags: Optional[list[str]] = None,
     ) -> list[SearchResult]:
-        """向量相似度搜索。
+        """向量相似度搜索，支持标签过滤。
 
         Args:
             query: 查询向量
             top_k: 返回前 k 个结果
             threshold: 相似度阈值，低于此值的结果将被过滤
+            tags: 标签过滤列表（AND 逻辑：记忆必须包含所有指定标签）
 
         Returns:
             按相似度降序排列的 SearchResult 列表
@@ -120,9 +122,35 @@ class EmbeddingStore:
 
         results: list[SearchResult] = []
         for mem in self._memories.values():
+            # 标签过滤
+            if tags and not all(mem.has_tag(t) for t in tags):
+                continue
             score = cosine_similarity(query, mem.embedding)  # type: ignore[arg-type]
             if score >= threshold:
                 results.append(SearchResult(memory=mem, score=score))
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:top_k]
+
+    def get_all_tags(self) -> dict[str, int]:
+        """获取所有标签及其使用次数。
+
+        Returns:
+            标签名称到使用次数的映射
+        """
+        tag_counts: dict[str, int] = {}
+        for mem in self._memories.values():
+            for tag in mem.tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        return tag_counts
+
+    def find_by_tag(self, tag: str) -> list[Memory]:
+        """查找包含指定标签的所有记忆。
+
+        Args:
+            tag: 标签名称（不区分大小写）
+
+        Returns:
+            包含该标签的 Memory 列表
+        """
+        return [m for m in self._memories.values() if m.has_tag(tag)]

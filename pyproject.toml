@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "agentmemory"
-version = "0.1.0"
+version = "0.2.0"
 description = "混合记忆框架：向量搜索 + 知识图谱"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,6 +16,9 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+
+[project.scripts]
+agentmemory = "agentmemory.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

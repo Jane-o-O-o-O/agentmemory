@@ -21,3 +21,5 @@ __all__ = [
     "HybridMemory",
     "JSONBackend", "SQLiteBackend",
 ]
+
+__version__ = "0.2.0"
