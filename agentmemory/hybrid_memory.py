@@ -7,6 +7,7 @@ from typing import Any, Optional
 from agentmemory.models import Entity, Memory, Relation, SearchResult
 from agentmemory.embedding_store import EmbeddingStore
 from agentmemory.knowledge_graph import KnowledgeGraph
+from agentmemory.embedding_provider import EmbeddingProvider
 
 
 class HybridMemory:
@@ -15,7 +16,8 @@ class HybridMemory:
     提供统一的记忆存储、检索和知识关联 API。
 
     Args:
-        dimension: 向量维度
+        dimension: 向量维度。如果提供 embedding_provider，可以从 provider 自动推断。
+        embedding_provider: Embedding 提供者，设置后 remember/search_text 可自动计算向量。
         storage_path: 持久化存储路径（目录或文件），None 表示不持久化
         storage_backend: 存储后端类型，'json' 或 'sqlite'
         auto_save: 每次 remember/forget 后自动保存
@@ -24,14 +26,30 @@ class HybridMemory:
 
     def __init__(
         self,
-        dimension: int,
+        dimension: Optional[int] = None,
+        embedding_provider: Optional[EmbeddingProvider] = None,
         storage_path: Optional[str] = None,
         storage_backend: str = "json",
         auto_save: bool = False,
         auto_load: bool = False,
     ) -> None:
-        self._dimension = dimension
-        self.embedding_store = EmbeddingStore(dimension=dimension)
+        self._embedding_provider = embedding_provider
+
+        # 推断维度
+        if dimension is not None and embedding_provider is not None:
+            if dimension != embedding_provider.dimension():
+                raise ValueError(
+                    f"维度不匹配: 手动指定 {dimension}, provider 为 {embedding_provider.dimension()}"
+                )
+            self._dimension = dimension
+        elif dimension is not None:
+            self._dimension = dimension
+        elif embedding_provider is not None:
+            self._dimension = embedding_provider.dimension()
+        else:
+            raise ValueError("必须指定 dimension 或 embedding_provider")
+
+        self.embedding_store = EmbeddingStore(dimension=self._dimension)
         self.knowledge_graph = KnowledgeGraph()
         self._storage_path = storage_path
         self._storage_backend = storage_backend
@@ -96,17 +114,22 @@ class HybridMemory:
     ) -> Memory:
         """添加一条记忆到存储。
 
+        如果配置了 embedding_provider 且未手动传入 embedding，
+        将自动使用 provider 计算向量。
+
         Args:
             content: 文本内容
-            embedding: 向量表示
+            embedding: 向量表示（可选，有 provider 时自动计算）
             metadata: 附加元数据
 
         Returns:
             创建的 Memory 对象
 
         Raises:
-            ValueError: embedding 为空或维度不匹配
+            ValueError: 没有 embedding 也没有 provider
         """
+        if embedding is None and self._embedding_provider is not None:
+            embedding = self._embedding_provider.embed(content)
         mem = Memory(content=content, embedding=embedding, metadata=metadata or {})
         self.embedding_store.add(mem)
         self._auto_save_if_enabled()
@@ -311,6 +334,77 @@ class HybridMemory:
                             seen_memory_ids.add(stored_mem.id)
 
         return context_memories
+
+    # --- 文本搜索 ---
+
+    def search_text(
+        self,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.0,
+    ) -> list[SearchResult]:
+        """文本相似度搜索（需要 embedding_provider）。
+
+        自动将查询文本转为向量后执行搜索。
+
+        Args:
+            query: 查询文本
+            top_k: 返回前 k 个结果
+            threshold: 相似度阈值
+
+        Returns:
+            按相似度降序排列的 SearchResult 列表
+
+        Raises:
+            ValueError: 未配置 embedding_provider
+        """
+        if self._embedding_provider is None:
+            raise ValueError(
+                "使用 search_text 需要配置 embedding_provider，"
+                "或使用 search(query_embedding=[...]) 直接搜索向量"
+            )
+        query_embedding = self._embedding_provider.embed(query)
+        return self.search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            threshold=threshold,
+        )
+
+    def hybrid_search_text(
+        self,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.0,
+        graph_depth: int = 1,
+    ) -> list[SearchResult]:
+        """文本混合搜索（需要 embedding_provider）。
+
+        自动将查询文本转为向量后执行混合搜索。
+
+        Args:
+            query: 查询文本
+            top_k: 返回前 k 个结果
+            threshold: 相似度阈值
+            graph_depth: 图谱遍历深度
+
+        Returns:
+            带有图谱上下文的 SearchResult 列表
+
+        Raises:
+            ValueError: 未配置 embedding_provider
+        """
+        if self._embedding_provider is None:
+            raise ValueError(
+                "使用 hybrid_search_text 需要配置 embedding_provider，"
+                "或使用 hybrid_search(query_embedding=[...]) 直接搜索向量"
+            )
+        query_embedding = self._embedding_provider.embed(query)
+        return self.hybrid_search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            threshold=threshold,
+            graph_depth=graph_depth,
+        )
 
     # --- 统计 ---
 
