@@ -12,13 +12,17 @@
 | **LSH 索引** | 局部敏感哈希，O(1) 近似最近邻（大规模数据优化） |
 | **知识图谱** | 实体/关系 CRUD + BFS 遍历 |
 | **混合搜索** | 向量搜索 + 图谱上下文增强 |
+| **搜索过滤器** | 按 metadata/时间/重要性/标签多维过滤 |
 | **标签系统** | 记忆标签分类与过滤搜索 |
 | **生命周期** | TTL 过期、重要性评分、时间衰减 |
 | **批量操作** | batch_remember / batch_search / batch_forget |
 | **高级 API** | update_memory / merge_memories / forget_where |
+| **异步 API** | AsyncHybridMemory，支持 asyncio.gather 并发 |
+| **Session 管理** | with hm.session() 自动 save/load |
+| **Embedding 缓存** | CachedEmbeddingProvider LRU 缓存避免重复计算 |
 | **Embedding Provider** | 内置 Hash/可选 OpenAI/HuggingFace |
 | **JSON/SQLite 持久化** | 人类可读文件或高性能数据库 |
-| **CLI 工具** | 命令行管理记忆（含 inspect/cleanup/version） |
+| **CLI 工具** | 命令行管理记忆（含 interactive/batch-import/visualize） |
 | **导入/导出** | JSON/CSV 格式数据迁移 |
 | **类型安全** | 完整类型注解 + dataclass 模型 |
 
@@ -60,6 +64,80 @@ memories = hm.batch_remember(
     contents=["记忆1", "记忆2", "记忆3"],
     tagss=[["tag1"], ["tag2"], ["tag1", "tag3"]],
 )
+```
+
+### Session 会话管理
+
+```python
+# 使用 context manager 自动管理持久化
+hm = HybridMemory(
+    dimension=128,
+    embedding_provider=HashEmbeddingProvider(dim=128),
+    storage_path="./data",
+    auto_save=True,
+)
+
+with hm.session() as s:
+    s.remember("重要笔记", tags=["笔记"])
+    s.remember("会议记录", tags=["会议"])
+    # 退出时自动保存
+```
+
+### 搜索过滤器
+
+```python
+from agentmemory import SearchFilter
+
+# 多维度过滤
+f = SearchFilter(
+    tags=["重要"],
+    content_contains=["报告"],
+    created_after=time.time() - 86400,  # 最近 24 小时
+    metadata_filters={"source": "api"},
+)
+
+# 全局过滤器 — 所有搜索自动应用
+hm.set_default_filter(f)
+results = hm.search_text("季度报告")  # 自动过滤
+```
+
+### 异步 API
+
+```python
+import asyncio
+from agentmemory import HybridMemory, HashEmbeddingProvider, AsyncHybridMemory
+
+async def main():
+    hm = HybridMemory(dimension=128, embedding_provider=HashEmbeddingProvider(dim=128))
+    async with AsyncHybridMemory(hm) as am:
+        # 并发添加
+        await am.abatch_remember(["记忆A", "记忆B", "记忆C"])
+        
+        # 并发搜索
+        results = await am.abatch_search([query1, query2])
+        
+        # 单条操作
+        mem = await am.aremember("异步记忆")
+        results = await am.asearch_text("搜索")
+
+asyncio.run(main())
+```
+
+### Embedding 缓存
+
+```python
+from agentmemory import CachedEmbeddingProvider, HashEmbeddingProvider
+
+# 包装 provider，自动缓存重复文本的 embedding
+provider = CachedEmbeddingProvider(
+    HashEmbeddingProvider(dim=128),
+    max_cache_size=2048,
+)
+
+hm = HybridMemory(dimension=128, embedding_provider=provider)
+# 批量操作中重复文本不会重复计算
+hm.batch_remember(["相同文本"] * 100)
+print(provider.cache_stats)  # {'hits': 99, 'misses': 1, ...}
 ```
 
 ### LSH 加速搜索
@@ -190,6 +268,15 @@ agentmemory export --format csv --output data.csv
 agentmemory import data.json
 agentmemory import data.csv --format csv
 
+# 批量导入（每行一条记忆）
+agentmemory batch-import words.txt --tags vocabulary
+
+# 交互式 REPL
+agentmemory interactive --store ./data
+
+# 可视化统计
+agentmemory visualize
+
 # 知识图谱
 agentmemory add-entity "Python" "language" --props version=3.11
 agentmemory add-relation <src_id> <dst_id> "related_to"
@@ -238,6 +325,14 @@ HybridMemory(
 | `add_tag(memory_id, tag)` | 添加标签 |
 | `remove_tag(memory_id, tag)` | 移除标签 |
 | `get_all_tags()` | 获取所有标签及计数 |
+| `session()` | 创建上下文管理器 |
+
+#### 搜索过滤器
+
+| 方法/类 | 说明 |
+|---|---|
+| `set_default_filter(filter)` | 设置全局搜索过滤器 |
+| `SearchFilter(tags, metadata_filters, ...)` | 多维度过滤器 |
 
 #### 生命周期
 
@@ -273,6 +368,44 @@ HybridMemory(
 | `export_csv()` | 导出为 CSV 字符串 |
 | `import_csv(csv_str)` | 从 CSV 导入 |
 
+### AsyncHybridMemory
+
+```python
+from agentmemory import AsyncHybridMemory
+
+am = AsyncHybridMemory(hm, max_workers=4)
+# 或
+async with AsyncHybridMemory(hm) as am:
+    await am.aremember("text")
+    await am.asearch_text("query")
+    await am.abatch_remember(["a", "b", "c"])
+```
+
+| 方法 | 说明 |
+|---|---|
+| `aremember(...)` | 异步添加记忆 |
+| `asearch(...)` | 异步向量搜索 |
+| `asearch_text(...)` | 异步文本搜索 |
+| `ahybrid_search(...)` | 异步混合搜索 |
+| `abatch_search(...)` | 异步批量搜索 |
+| `abatch_remember(...)` | 异步批量添加 |
+| `aforget(id)` | 异步删除 |
+| `aget_memory(id)` | 异步获取 |
+| `asave() / aload()` | 异步持久化 |
+| `astats()` | 异步统计 |
+
+### CachedEmbeddingProvider
+
+```python
+from agentmemory import CachedEmbeddingProvider, HashEmbeddingProvider
+
+provider = CachedEmbeddingProvider(
+    HashEmbeddingProvider(dim=128),
+    max_cache_size=1024,
+)
+print(provider.cache_stats)  # {'hits': N, 'misses': N, 'hit_rate': 0.XX}
+```
+
 #### Embedding Provider
 
 ```python
@@ -296,7 +429,7 @@ provider = HuggingFaceEmbeddingProvider(model="all-MiniLM-L6-v2")
 pytest tests/ -v
 ```
 
-无需外部服务，全部纯 Python 测试（235 个测试）。
+无需外部服务，全部纯 Python 测试（287 个测试）。
 
 ---
 
@@ -309,12 +442,15 @@ agentmemory/
 │   ├── models.py              # Memory, Entity, Relation, SearchResult
 │   ├── embedding_store.py     # 向量存储 + 余弦相似度 + LSH 加速
 │   ├── embedding_provider.py  # Embedding 提供者抽象层
+│   ├── embedding_cache.py     # LRU 缓存的 EmbeddingProvider
 │   ├── knowledge_graph.py     # 知识图谱 + BFS 遍历
-│   ├── hybrid_memory.py       # 统一 API（搜索/标签/批量/生命周期/导入导出）
+│   ├── hybrid_memory.py       # 统一 API（搜索/标签/批量/生命周期/导入导出/Session）
+│   ├── async_api.py           # 异步 API 封装
+│   ├── search_filter.py       # 搜索过滤器
 │   ├── persistence.py         # JSON/SQLite 持久化后端
 │   ├── lsh_index.py           # LSH 近似最近邻索引
 │   ├── lifecycle.py           # 记忆生命周期管理
-│   └── cli.py                 # 命令行工具
+│   └── cli.py                 # 命令行工具（含 interactive/visualize）
 ├── tests/
 │   ├── test_models.py
 │   ├── test_embedding_store.py
@@ -327,8 +463,12 @@ agentmemory/
 │   ├── test_cli.py
 │   ├── test_lsh_index.py
 │   ├── test_lifecycle.py
-│   └── test_new_features.py
+│   ├── test_new_features.py
+│   ├── test_v04_features.py   # v0.4.0 新功能测试
+│   └── benchmark.py           # 性能基准测试
 ├── pyproject.toml
+├── LICENSE
+├── MANIFEST.in
 ├── CHANGELOG.md
 └── README.md
 ```
@@ -343,5 +483,5 @@ MIT
 
 <p align="center">
   Built with ❤️ by <a href="https://nousresearch.com">Nous Research</a>
-  · <a href="https://github.com/nousresearch/agentmemory">GitHub</a>
+  · <a href="https://github.com/Jane-o-O-o-O/agentmemory">GitHub</a>
 </p>

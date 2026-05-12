@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.4.0 (2026-05-12)
+
+### 新增
+- **异步 API (AsyncHybridMemory)**：所有主要方法的 async 版本，支持 asyncio.gather 并发操作
+- **搜索过滤器 (SearchFilter)**：按 metadata、时间范围、重要性范围、标签、内容多维过滤
+- **全局搜索过滤器**：HybridMemory.set_default_filter() 设置后自动应用于所有搜索
+- **Session 上下文管理器**：`with hm.session() as s:` 自动在退出时保存数据
+- **Embedding 缓存 (CachedEmbeddingProvider)**：LRU 缓存避免重复计算，支持命中率统计
+- **CLI interactive 命令**：交互式 REPL 模式，直接在命令行管理记忆
+- **CLI batch-import 命令**：从文本文件批量导入记忆（每行一条）
+- **CLI visualize 命令**：文本可视化统计（柱状图、标签分布）
+- **性能基准测试**：LSH vs 暴力搜索在不同数据规模下的性能对比脚本
+- **PyPI 发布配置**：LICENSE (MIT)、MANIFEST.in、完整 pyproject.toml 元数据
+
+### 改进
+- HybridMemory 新增 session() 方法返回 MemorySession
+- search() 和 hybrid_search() 自动应用默认过滤器
+- __init__.py 导出所有新模块
+- 测试从 235 个增加到 287 个（+22%）
+
+### 内部
+- 版本升级到 0.4.0
+- 新增 async_api.py、embedding_cache.py、search_filter.py 模块
+- 项目结构新增 LICENSE、MANIFEST.in
+
+---
+
 ## v0.3.0 (2026-05-12)
 
 ### 新增
