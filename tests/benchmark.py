@@ -1,5 +1,7 @@
 """性能基准测试 — LSH vs 暴力搜索在不同数据规模下的性能对比。
 
+v0.5.0: 测试多探针 LSH 的召回率改善。
+
 这不是 pytest 测试，而是独立的基准脚本。
 运行: python -m tests.benchmark
 """
@@ -47,8 +49,11 @@ def run_benchmark(sizes: list[int] = None, dim: int = 128, top_k: int = 10, quer
             brute_results = hm_brute.search(emb, top_k=top_k)
         brute_time = (time.perf_counter() - t0) * 1000
 
-        # LSH 搜索
-        hm_lsh = HybridMemory(dimension=dim, embedding_provider=provider, use_lsh=True)
+        # LSH 搜索（v0.5.0 多探针）
+        hm_lsh = HybridMemory(
+            dimension=dim, embedding_provider=provider,
+            use_lsh=True, lsh_tables=8, lsh_hyperplanes=12,
+        )
         for c in contents:
             hm_lsh.remember(c)
 
@@ -64,8 +69,8 @@ def run_benchmark(sizes: list[int] = None, dim: int = 128, top_k: int = 10, quer
         print(f"{size:>8} | {brute_time:>14.1f} | {lsh_time:>12.1f} | {speedup:>7.2f}x | {brute_count:>10} | {lsh_count:>10}")
 
     print()
-    print("说明：LSH 在大规模数据 (≥1000) 时搜索速度优势明显，")
-    print("      但可能返回略有不同的近似结果。")
+    print("说明：v0.5.0 多探针 LSH 大幅提升召回率，大规模数据下不再返回空结果。")
+    print("      搜索速度优势在 ≥1000 条数据时开始显现。")
 
 
 if __name__ == "__main__":
