@@ -212,3 +212,18 @@ def _process_memory_lifecycle_management(args, kwargs):
 def _execute_memory_lifecycle_management(args, config):
     """Execute the core memory lifecycle management logic."""
     return {"status": "success", "feature": "memory lifecycle management", "config": config}
+
+# [2026-05-12] Chore: update embedding_cache
+# Version bump and minor cleanup
+__version_info__ = (1, 8, 10)
+__version__ = ".".join(map(str, __version_info__))
+
+# Updated configuration defaults
+_DEFAULT_CONFIG = {
+    "enabled": True,
+    "debug": False,
+    "max_retries": 3,
+    "timeout": 30,
+    "cache_size": 256,
+    "log_level": "INFO",
+}
