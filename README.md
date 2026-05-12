@@ -8,14 +8,17 @@
 
 | 功能 | 说明 |
 |---|---|
-| **向量搜索** | 余弦相似度搜索 |
+| **向量搜索** | 余弦相似度搜索 + LSH 近似加速 |
+| **LSH 索引** | 局部敏感哈希，O(1) 近似最近邻（大规模数据优化） |
 | **知识图谱** | 实体/关系 CRUD + BFS 遍历 |
 | **混合搜索** | 向量搜索 + 图谱上下文增强 |
 | **标签系统** | 记忆标签分类与过滤搜索 |
+| **生命周期** | TTL 过期、重要性评分、时间衰减 |
 | **批量操作** | batch_remember / batch_search / batch_forget |
+| **高级 API** | update_memory / merge_memories / forget_where |
 | **Embedding Provider** | 内置 Hash/可选 OpenAI/HuggingFace |
 | **JSON/SQLite 持久化** | 人类可读文件或高性能数据库 |
-| **CLI 工具** | 命令行管理记忆 |
+| **CLI 工具** | 命令行管理记忆（含 inspect/cleanup/version） |
 | **导入/导出** | JSON/CSV 格式数据迁移 |
 | **类型安全** | 完整类型注解 + dataclass 模型 |
 
@@ -57,6 +60,54 @@ memories = hm.batch_remember(
     contents=["记忆1", "记忆2", "记忆3"],
     tagss=[["tag1"], ["tag2"], ["tag1", "tag3"]],
 )
+```
+
+### LSH 加速搜索
+
+```python
+# 启用 LSH 索引，适合大规模数据（>10k 条记忆）
+hm = HybridMemory(
+    dimension=128,
+    embedding_provider=HashEmbeddingProvider(dim=128),
+    use_lsh=True,
+    lsh_tables=8,       # 哈希表数量（越多召回率越高）
+    lsh_hyperplanes=16,  # 每表超平面数（越细粒度）
+)
+
+# 搜索会自动使用 LSH 加速
+results = hm.search_text("查询内容", top_k=5)
+```
+
+### 记忆生命周期
+
+```python
+# 添加带 TTL 的记忆（300 秒后过期）
+hm.remember("临时通知", ttl=300)
+
+# 添加高重要性记忆
+hm.remember("关键决策", importance=0.9)
+
+# 查看生命周期信息
+info = hm.get_lifecycle_info(memory_id)
+print(info["decay_factor"])     # 时间衰减因子
+print(info["access_count"])     # 访问次数
+print(info["time_remaining"])   # 剩余存活时间
+
+# 清理过期记忆
+expired_ids = hm.cleanup_expired()
+
+# 按条件删除
+deleted = hm.forget_where(lambda m: "临时" in m.content)
+```
+
+### 高级操作
+
+```python
+# 更新记忆（自动重新计算 embedding）
+hm.update_memory(memory_id, content="新内容", tags=["新标签"])
+
+# 合并记忆
+merged = hm.merge_memories([id1, id2, id3], new_content="合并结果")
 ```
 
 ### 知识图谱
@@ -106,9 +157,15 @@ agentmemory remember "这是一条记忆" --tags tag1 tag2
 # 搜索记忆
 agentmemory search "查询内容" --top-k 5 --tags tag1
 
+# 混合搜索（向量 + 图谱）
+agentmemory search "查询内容" --hybrid
+
 # 列出记忆
 agentmemory list
 agentmemory list --tag tag1
+
+# 查看记忆详情（含生命周期信息）
+agentmemory inspect <memory_id>
 
 # 查看标签
 agentmemory tags
@@ -116,8 +173,14 @@ agentmemory tags
 # 删除记忆
 agentmemory forget <memory_id>
 
+# 清理过期记忆
+agentmemory cleanup
+
 # 统计信息
 agentmemory stats
+
+# 版本信息
+agentmemory version
 
 # 导出数据
 agentmemory export --format json --output data.json
@@ -133,8 +196,8 @@ agentmemory add-relation <src_id> <dst_id> "related_to"
 agentmemory graph
 agentmemory graph --entity-id <id>
 
-# 使用 SQLite 后端
-agentmemory --store ./data --backend sqlite stats
+# 使用 SQLite 后端 + LSH 加速
+agentmemory --store ./data --backend sqlite --lsh stats
 ```
 
 ---
@@ -151,6 +214,11 @@ HybridMemory(
     storage_backend: str = "json",               # "json" 或 "sqlite"
     auto_save: bool = False,                     # 自动保存
     auto_load: bool = False,                     # 自动加载
+    use_lsh: bool = False,                       # 启用 LSH 索引
+    lsh_tables: int = 8,                         # LSH 哈希表数量
+    lsh_hyperplanes: int = 16,                   # LSH 超平面数量
+    default_ttl: float = None,                   # 默认 TTL（秒）
+    decay_rate: float = 0.001,                   # 衰减速率
 )
 ```
 
@@ -158,15 +226,25 @@ HybridMemory(
 
 | 方法 | 说明 |
 |---|---|
-| `remember(content, embedding, metadata, tags)` | 添加记忆 |
+| `remember(content, embedding, metadata, tags, importance, ttl)` | 添加记忆 |
+| `update_memory(memory_id, content, metadata, tags)` | 更新记忆 |
+| `merge_memories(memory_ids, new_content)` | 合并记忆 |
 | `batch_remember(contents, embeddings, metadatas, tagss)` | 批量添加 |
 | `forget(memory_id)` | 删除记忆 |
+| `forget_where(predicate)` | 按条件删除 |
 | `batch_forget(memory_ids)` | 批量删除 |
 | `get_memory(memory_id)` | 获取记忆 |
 | `list_all()` | 列出所有记忆 |
 | `add_tag(memory_id, tag)` | 添加标签 |
 | `remove_tag(memory_id, tag)` | 移除标签 |
 | `get_all_tags()` | 获取所有标签及计数 |
+
+#### 生命周期
+
+| 方法 | 说明 |
+|---|---|
+| `get_lifecycle_info(memory_id)` | 获取生命周期信息 |
+| `cleanup_expired()` | 清理过期记忆 |
 
 #### 搜索操作
 
@@ -218,7 +296,7 @@ provider = HuggingFaceEmbeddingProvider(model="all-MiniLM-L6-v2")
 pytest tests/ -v
 ```
 
-无需外部服务，全部纯 Python 测试。
+无需外部服务，全部纯 Python 测试（235 个测试）。
 
 ---
 
@@ -229,11 +307,13 @@ agentmemory/
 ├── agentmemory/
 │   ├── __init__.py            # 公共 API 导出
 │   ├── models.py              # Memory, Entity, Relation, SearchResult
-│   ├── embedding_store.py     # 向量存储 + 余弦相似度
+│   ├── embedding_store.py     # 向量存储 + 余弦相似度 + LSH 加速
 │   ├── embedding_provider.py  # Embedding 提供者抽象层
 │   ├── knowledge_graph.py     # 知识图谱 + BFS 遍历
-│   ├── hybrid_memory.py       # 统一 API（搜索/标签/批量/导入导出）
+│   ├── hybrid_memory.py       # 统一 API（搜索/标签/批量/生命周期/导入导出）
 │   ├── persistence.py         # JSON/SQLite 持久化后端
+│   ├── lsh_index.py           # LSH 近似最近邻索引
+│   ├── lifecycle.py           # 记忆生命周期管理
 │   └── cli.py                 # 命令行工具
 ├── tests/
 │   ├── test_models.py
@@ -244,8 +324,12 @@ agentmemory/
 │   ├── test_persistence.py
 │   ├── test_hybrid_persistence.py
 │   ├── test_batch_tags_export.py
-│   └── test_cli.py
+│   ├── test_cli.py
+│   ├── test_lsh_index.py
+│   ├── test_lifecycle.py
+│   └── test_new_features.py
 ├── pyproject.toml
+├── CHANGELOG.md
 └── README.md
 ```
 

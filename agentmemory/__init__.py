@@ -11,6 +11,8 @@ from agentmemory.embedding_provider import (
 from agentmemory.knowledge_graph import KnowledgeGraph
 from agentmemory.hybrid_memory import HybridMemory
 from agentmemory.persistence import JSONBackend, SQLiteBackend
+from agentmemory.lifecycle import MemoryLifecycle
+from agentmemory.lsh_index import LSHIndex
 
 __all__ = [
     "Memory", "Entity", "Relation", "SearchResult",
@@ -20,6 +22,8 @@ __all__ = [
     "KnowledgeGraph",
     "HybridMemory",
     "JSONBackend", "SQLiteBackend",
+    "MemoryLifecycle",
+    "LSHIndex",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
