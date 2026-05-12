@@ -270,6 +270,134 @@ def cmd_graph(args: argparse.Namespace) -> None:
             print(f"  {src_name} --[{r.relation_type}]--> {tgt_name}")
 
 
+def _get_version() -> str:
+    """获取版本号"""
+    from agentmemory import __version__
+    return __version__
+
+
+def cmd_interactive(args: argparse.Namespace) -> None:
+    """交互式 REPL 模式"""
+    mem = _get_memory(args)
+    print(f"agentmemory v{_get_version()} — 交互式模式")
+    print("输入 remember/search/list/stats/forget/cleanup/quit")
+    print()
+    while True:
+        try:
+            line = input("agentmemory> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n退出")
+            break
+
+        if not line:
+            continue
+
+        parts = line.split(maxsplit=1)
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+
+        try:
+            if cmd in ("quit", "exit", "q"):
+                print("退出")
+                break
+            elif cmd == "remember" and arg:
+                tags = []
+                if "--tags" in arg:
+                    text_part, tags_part = arg.split("--tags", 1)
+                    text = text_part.strip().strip('"').strip("'")
+                    tags = tags_part.strip().split()
+                else:
+                    text = arg.strip('"').strip("'")
+                m = mem.remember(text, tags=tags)
+                print(f"  已添加: {m.id[:12]}")
+            elif cmd == "search" and arg:
+                results = mem.search_text(arg.strip('"').strip("'"))
+                if not results:
+                    print("  未找到匹配的记忆")
+                for r in results:
+                    tag_str = f" [{', '.join(r.memory.tags)}]" if r.memory.tags else ""
+                    print(f"  {r.memory.id[:12]}  score={r.score:.4f}  {r.memory.content[:50]}{tag_str}")
+            elif cmd == "list":
+                all_mems = mem.list_all()
+                if not all_mems:
+                    print("  暂无记忆")
+                for m in all_mems:
+                    tag_str = f" [{', '.join(m.tags)}]" if m.tags else ""
+                    print(f"  {m.id[:12]}  {m.content[:50]}{tag_str}")
+            elif cmd == "stats":
+                s = mem.stats()
+                print(f"  记忆: {s['memory_count']}  实体: {s['entity_count']}  关系: {s['relation_count']}  LSH: {'✓' if s['use_lsh'] else '✗'}")
+            elif cmd == "forget" and arg:
+                mem.forget(arg.strip())
+                print(f"  已删除: {arg.strip()}")
+            elif cmd == "cleanup":
+                expired = mem.cleanup_expired()
+                print(f"  清理 {len(expired)} 条过期记忆")
+            elif cmd == "help":
+                print("  remember <text> [--tags t1 t2]  添加记忆")
+                print("  search <query>                  搜索记忆")
+                print("  list                            列出所有")
+                print("  stats                           统计信息")
+                print("  forget <id>                     删除记忆")
+                print("  cleanup                         清理过期")
+                print("  quit                            退出")
+            else:
+                print(f"  未知命令: {cmd}，输入 help 查看帮助")
+        except Exception as e:
+            print(f"  错误: {e}")
+
+
+def cmd_batch_import(args: argparse.Namespace) -> None:
+    """从文本文件批量导入记忆（每行一条）"""
+    mem = _get_memory(args)
+    tags = args.tags or []
+    count = 0
+    with open(args.file, "r", encoding="utf-8") as f:
+        for line in f:
+            text = line.strip()
+            if text and not text.startswith("#"):
+                mem.remember(text, tags=tags)
+                count += 1
+    print(f"已批量导入 {count} 条记忆" + (f"（标签: {', '.join(tags)}）" if tags else ""))
+
+
+def cmd_visualize(args: argparse.Namespace) -> None:
+    """文本可视化统计"""
+    mem = _get_memory(args)
+    s = mem.stats()
+
+    print("=" * 50)
+    print("  agentmemory 统计可视化")
+    print("=" * 50)
+
+    mc = s["memory_count"]
+    bar_len = min(mc, 40)
+    print(f"\n  记忆数: {mc}")
+    print(f"  {'█' * bar_len}{'░' * (40 - bar_len)}")
+
+    ec = s["entity_count"]
+    rc = s["relation_count"]
+    e_bar = min(ec, 40)
+    r_bar = min(rc, 40)
+    print(f"\n  实体数: {ec}")
+    print(f"  {'█' * e_bar}{'░' * (40 - e_bar)}")
+    print(f"\n  关系数: {rc}")
+    print(f"  {'█' * r_bar}{'░' * (40 - r_bar)}")
+
+    tags = mem.get_all_tags()
+    if tags:
+        print(f"\n  标签分布 (共 {len(tags)} 个):")
+        max_count = max(tags.values())
+        for tag, cnt in sorted(tags.items(), key=lambda x: -x[1])[:10]:
+            bar_len = int(cnt / max_count * 30) if max_count > 0 else 0
+            print(f"    {tag:15s} {'█' * bar_len} {cnt}")
+
+    print(f"\n  配置:")
+    print(f"    向量维度: {s['dimension']}")
+    print(f"    LSH 索引: {'启用' if s['use_lsh'] else '禁用'}")
+    print("=" * 50)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。
 
@@ -375,6 +503,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("graph", help="查看知识图谱")
     p.add_argument("--entity-id", help="查看特定实体的邻居")
     p.set_defaults(func=cmd_graph)
+
+    # interactive
+    p = subparsers.add_parser("interactive", help="交互式 REPL 模式")
+    p.set_defaults(func=cmd_interactive)
+
+    # batch-import
+    p = subparsers.add_parser("batch-import", help="从文本文件批量导入（每行一条）")
+    p.add_argument("file", help="文本文件路径")
+    p.add_argument("--tags", nargs="*", help="标签列表")
+    p.set_defaults(func=cmd_batch_import)
+
+    # visualize
+    p = subparsers.add_parser("visualize", help="文本可视化统计")
+    p.set_defaults(func=cmd_visualize)
 
     return parser
 

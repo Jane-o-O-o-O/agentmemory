@@ -16,6 +16,7 @@ from agentmemory.embedding_store import EmbeddingStore
 from agentmemory.knowledge_graph import KnowledgeGraph
 from agentmemory.embedding_provider import EmbeddingProvider
 from agentmemory.lifecycle import MemoryLifecycle
+from agentmemory.search_filter import SearchFilter, filter_search_results
 
 
 class HybridMemory:
@@ -53,6 +54,9 @@ class HybridMemory:
         decay_rate: float = 0.001,
     ) -> None:
         self._embedding_provider = embedding_provider
+
+        # 搜索过滤器（可全局设置）
+        self._default_filter: Optional[SearchFilter] = None
 
         # 推断维度
         if dimension is not None and embedding_provider is not None:
@@ -104,6 +108,25 @@ class HybridMemory:
         return self._dimension
 
     # --- 持久化 ---
+
+    # --- 上下文管理器 ---
+
+    def session(self) -> "MemorySession":
+        """创建记忆会话上下文管理器。
+
+        使用 `with hm.session() as s:` 自动在退出时保存数据，
+        进入时可选加载。
+
+        Returns:
+            MemorySession 实例
+
+        Example:
+            >>> with hm.session() as s:
+            ...     s.remember("hello")
+            ...     s.remember("world")
+            # 自动保存
+        """
+        return MemorySession(self)
 
     def save(self) -> None:
         """保存当前数据到磁盘。
@@ -556,6 +579,9 @@ class HybridMemory:
             threshold=threshold,
             tags=tags,
         )
+        # 应用默认过滤器
+        if self._default_filter is not None:
+            results = filter_search_results(results, self._default_filter, self.lifecycle)
         # 记录搜索访问
         for r in results:
             self.lifecycle.record_access(r.memory.id)
@@ -624,6 +650,9 @@ class HybridMemory:
             context_memories = self._find_graph_context(result.memory, graph_depth)
             result.context = context_memories
 
+        # 应用默认过滤器
+        if self._default_filter is not None:
+            results = filter_search_results(results, self._default_filter, self.lifecycle)
         return results
 
     def _find_graph_context(
@@ -758,6 +787,18 @@ class HybridMemory:
             "dimension": self._dimension,
         }
 
+    # --- 搜索过滤器 ---
+
+    def set_default_filter(self, search_filter: Optional[SearchFilter]) -> None:
+        """设置全局默认搜索过滤器。
+
+        设置后所有 search/hybrid_search 方法都会自动应用过滤。
+
+        Args:
+            search_filter: SearchFilter 实例，None 表示清除
+        """
+        self._default_filter = search_filter
+
     # --- 导出/导入 ---
 
     def export_json(self, pretty: bool = True) -> str:
@@ -879,3 +920,92 @@ class HybridMemory:
                 pass
         self._auto_save_if_enabled()
         return count
+
+
+class MemorySession:
+    """记忆会话上下文管理器。
+
+    进入时可选加载数据，退出时自动保存。
+    代理 HybridMemory 的主要方法以方便使用。
+
+    Args:
+        memory: HybridMemory 实例
+        load_on_enter: 进入时是否自动加载（仅当有 storage_path 时生效）
+    """
+
+    def __init__(
+        self,
+        memory: HybridMemory,
+        load_on_enter: bool = True,
+    ) -> None:
+        self._memory = memory
+        self._load_on_enter = load_on_enter
+        self._operations_count: int = 0
+
+    def __enter__(self) -> "MemorySession":
+        if self._load_on_enter and self._memory._backend:
+            try:
+                self._memory.load()
+            except Exception:
+                pass  # 首次运行可能没有文件
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self._memory._backend:
+            self._memory.save()
+
+    @property
+    def operations_count(self) -> int:
+        """本次会话的操作次数"""
+        return self._operations_count
+
+    def remember(self, *args, **kwargs):
+        """代理 HybridMemory.remember"""
+        self._operations_count += 1
+        return self._memory.remember(*args, **kwargs)
+
+    def search(self, *args, **kwargs):
+        """代理 HybridMemory.search"""
+        return self._memory.search(*args, **kwargs)
+
+    def search_text(self, *args, **kwargs):
+        """代理 HybridMemory.search_text"""
+        return self._memory.search_text(*args, **kwargs)
+
+    def hybrid_search(self, *args, **kwargs):
+        """代理 HybridMemory.hybrid_search"""
+        return self._memory.hybrid_search(*args, **kwargs)
+
+    def hybrid_search_text(self, *args, **kwargs):
+        """代理 HybridMemory.hybrid_search_text"""
+        return self._memory.hybrid_search_text(*args, **kwargs)
+
+    def forget(self, *args, **kwargs):
+        """代理 HybridMemory.forget"""
+        self._operations_count += 1
+        return self._memory.forget(*args, **kwargs)
+
+    def get_memory(self, *args, **kwargs):
+        """代理 HybridMemory.get_memory"""
+        return self._memory.get_memory(*args, **kwargs)
+
+    def update_memory(self, *args, **kwargs):
+        """代理 HybridMemory.update_memory"""
+        self._operations_count += 1
+        return self._memory.update_memory(*args, **kwargs)
+
+    def add_entity(self, *args, **kwargs):
+        """代理 HybridMemory.add_entity"""
+        self._operations_count += 1
+        return self._memory.add_entity(*args, **kwargs)
+
+    def add_relation(self, *args, **kwargs):
+        """代理 HybridMemory.add_relation"""
+        self._operations_count += 1
+        return self._memory.add_relation(*args, **kwargs)
+
+    def stats(self):
+        """代理 HybridMemory.stats + 会话统计"""
+        base_stats = self._memory.stats()
+        base_stats["session_operations"] = self._operations_count
+        return base_stats

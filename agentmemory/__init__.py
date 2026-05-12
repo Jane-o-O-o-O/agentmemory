@@ -8,22 +8,28 @@ from agentmemory.embedding_provider import (
     OpenAIEmbeddingProvider,
     HuggingFaceEmbeddingProvider,
 )
+from agentmemory.embedding_cache import CachedEmbeddingProvider
 from agentmemory.knowledge_graph import KnowledgeGraph
-from agentmemory.hybrid_memory import HybridMemory
+from agentmemory.hybrid_memory import HybridMemory, MemorySession
 from agentmemory.persistence import JSONBackend, SQLiteBackend
 from agentmemory.lifecycle import MemoryLifecycle
 from agentmemory.lsh_index import LSHIndex
+from agentmemory.search_filter import SearchFilter, filter_search_results
+from agentmemory.async_api import AsyncHybridMemory
 
 __all__ = [
     "Memory", "Entity", "Relation", "SearchResult",
     "EmbeddingStore", "cosine_similarity",
     "EmbeddingProvider", "HashEmbeddingProvider",
     "OpenAIEmbeddingProvider", "HuggingFaceEmbeddingProvider",
+    "CachedEmbeddingProvider",
     "KnowledgeGraph",
-    "HybridMemory",
+    "HybridMemory", "MemorySession",
+    "AsyncHybridMemory",
     "JSONBackend", "SQLiteBackend",
     "MemoryLifecycle",
     "LSHIndex",
+    "SearchFilter", "filter_search_results",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
