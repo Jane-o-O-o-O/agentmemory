@@ -17,6 +17,7 @@ from agentmemory.knowledge_graph import KnowledgeGraph
 from agentmemory.embedding_provider import EmbeddingProvider
 from agentmemory.lifecycle import MemoryLifecycle
 from agentmemory.search_filter import SearchFilter, filter_search_results
+from agentmemory.weighted_search import WeightedScorer, ScoringWeights
 
 
 class HybridMemory:
@@ -52,11 +53,17 @@ class HybridMemory:
         lsh_hyperplanes: int = 16,
         default_ttl: Optional[float] = None,
         decay_rate: float = 0.001,
+        weighted_scoring: bool = False,
+        scoring_weights: Optional[ScoringWeights] = None,
     ) -> None:
         self._embedding_provider = embedding_provider
 
         # 搜索过滤器（可全局设置）
         self._default_filter: Optional[SearchFilter] = None
+        # 加权评分器
+        self._scorer: Optional[WeightedScorer] = None
+        if weighted_scoring:
+            self._scorer = WeightedScorer(weights=scoring_weights, decay_rate=decay_rate)
 
         # 推断维度
         if dimension is not None and embedding_provider is not None:
@@ -585,6 +592,11 @@ class HybridMemory:
         # 记录搜索访问
         for r in results:
             self.lifecycle.record_access(r.memory.id)
+            if self._scorer is not None:
+                self._scorer.record_access(r.memory.id)
+        # 加权重排序
+        if self._scorer is not None and results:
+            results = self._scorer.rerank(results)
         return results
 
     def batch_search(
@@ -798,6 +810,22 @@ class HybridMemory:
             search_filter: SearchFilter 实例，None 表示清除
         """
         self._default_filter = search_filter
+
+    def set_scorer(self, scorer: Optional[WeightedScorer]) -> None:
+        """设置加权评分器。
+
+        Args:
+            scorer: WeightedScorer 实例，None 表示禁用加权评分
+        """
+        self._scorer = scorer
+
+    def get_scorer(self) -> Optional[WeightedScorer]:
+        """获取当前加权评分器。
+
+        Returns:
+            WeightedScorer 实例，未设置返回 None
+        """
+        return self._scorer
 
     # --- 导出/导入 ---
 
