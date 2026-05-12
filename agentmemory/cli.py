@@ -2,11 +2,14 @@
 
 用法:
     agentmemory remember "text" [--tags tag1 tag2]
-    agentmemory search "query" [--top-k 5] [--tags tag1]
+    agentmemory search "query" [--top-k 5] [--tags tag1] [--hybrid]
     agentmemory forget <id>
     agentmemory list [--tag tag]
     agentmemory tags
     agentmemory stats
+    agentmemory inspect <id>
+    agentmemory cleanup
+    agentmemory version
     agentmemory export [--format json|csv] [--output file]
     agentmemory import <file> [--format json|csv]
     agentmemory add-entity "name" "type" [--props key=value]
@@ -41,6 +44,7 @@ def _get_memory(args: argparse.Namespace) -> HybridMemory:
         storage_backend=args.backend,
         auto_save=True,
         auto_load=True if args.store else False,
+        use_lsh=getattr(args, 'lsh', False),
     )
 
 
@@ -55,22 +59,33 @@ def cmd_remember(args: argparse.Namespace) -> None:
 
 def cmd_search(args: argparse.Namespace) -> None:
     """搜索记忆"""
-    results = _get_memory(args).search_text(
-        query=args.query,
-        top_k=args.top_k,
-        tags=args.tags or None,
-    )
+    mem = _get_memory(args)
+    if getattr(args, 'hybrid', False):
+        results = mem.hybrid_search_text(
+            query=args.query,
+            top_k=args.top_k,
+            tags=args.tags or None,
+        )
+    else:
+        results = mem.search_text(
+            query=args.query,
+            top_k=args.top_k,
+            tags=args.tags or None,
+        )
     if not results:
         print("未找到匹配的记忆")
         return
     output = []
     for r in results:
-        output.append({
+        entry = {
             "id": r.memory.id,
             "content": r.memory.content,
             "score": round(r.score, 4),
             "tags": r.memory.tags,
-        })
+        }
+        if r.context:
+            entry["context"] = [{"id": c.id, "content": c.content[:80]} for c in r.context]
+        output.append(entry)
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
@@ -117,6 +132,47 @@ def cmd_stats(args: argparse.Namespace) -> None:
     print(f"记忆数: {s['memory_count']}")
     print(f"实体数: {s['entity_count']}")
     print(f"关系数: {s['relation_count']}")
+    print(f"向量维度: {s['dimension']}")
+    print(f"LSH 索引: {'启用' if s['use_lsh'] else '禁用'}")
+
+
+def cmd_inspect(args: argparse.Namespace) -> None:
+    """查看记忆详情"""
+    mem = _get_memory(args)
+    memory = mem.get_memory(args.id)
+    if memory is None:
+        print(f"记忆不存在: {args.id}", file=sys.stderr)
+        sys.exit(1)
+
+    info = memory.to_dict()
+    # 添加生命周期信息
+    lifecycle_info = mem.get_lifecycle_info(args.id)
+    if lifecycle_info:
+        info["lifecycle"] = {
+            "age_seconds": round(lifecycle_info["age_seconds"], 2),
+            "is_expired": lifecycle_info["is_expired"],
+            "decay_factor": round(lifecycle_info["decay_factor"], 4),
+            "access_count": lifecycle_info["access_count"],
+        }
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+
+
+def cmd_cleanup(args: argparse.Namespace) -> None:
+    """清理过期记忆"""
+    expired = _get_memory(args).cleanup_expired()
+    if expired:
+        print(f"已清理 {len(expired)} 条过期记忆:")
+        for mid in expired:
+            print(f"  {mid}")
+    else:
+        print("没有过期记忆需要清理")
+
+
+def cmd_version(args: argparse.Namespace) -> None:
+    """显示版本信息"""
+    from agentmemory import __version__
+    print(f"agentmemory v{__version__}")
+    print("混合记忆框架：向量搜索 + 知识图谱")
 
 
 def cmd_export(args: argparse.Namespace) -> None:
@@ -236,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dimension", "-d", type=int, default=128,
         help="向量维度 (默认: 128)",
     )
+    parser.add_argument(
+        "--lsh", action="store_true",
+        help="启用 LSH 近似搜索索引",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="子命令")
 
@@ -250,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", help="搜索查询")
     p.add_argument("--top-k", type=int, default=5, help="返回结果数")
     p.add_argument("--tags", nargs="*", help="标签过滤")
+    p.add_argument("--hybrid", action="store_true", help="使用混合搜索（向量+图谱）")
     p.set_defaults(func=cmd_search)
 
     # forget
@@ -269,6 +330,19 @@ def build_parser() -> argparse.ArgumentParser:
     # stats
     p = subparsers.add_parser("stats", help="统计信息")
     p.set_defaults(func=cmd_stats)
+
+    # inspect
+    p = subparsers.add_parser("inspect", help="查看记忆详情")
+    p.add_argument("id", help="记忆 ID")
+    p.set_defaults(func=cmd_inspect)
+
+    # cleanup
+    p = subparsers.add_parser("cleanup", help="清理过期记忆")
+    p.set_defaults(func=cmd_cleanup)
+
+    # version
+    p = subparsers.add_parser("version", help="版本信息")
+    p.set_defaults(func=cmd_version)
 
     # export
     p = subparsers.add_parser("export", help="导出数据")

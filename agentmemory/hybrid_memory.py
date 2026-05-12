@@ -1,23 +1,28 @@
-"""混合记忆框架：统一向量搜索与知识图谱的高级 API"""
+"""混合记忆框架：统一向量搜索与知识图谱的高级 API。
+
+支持 LSH 加速搜索、记忆生命周期管理、高级查询等。
+"""
 
 from __future__ import annotations
 
 import csv
 import json
+import time
 from io import StringIO
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from agentmemory.models import Entity, Memory, Relation, SearchResult
 from agentmemory.embedding_store import EmbeddingStore
 from agentmemory.knowledge_graph import KnowledgeGraph
 from agentmemory.embedding_provider import EmbeddingProvider
+from agentmemory.lifecycle import MemoryLifecycle
 
 
 class HybridMemory:
     """混合记忆系统，结合向量搜索与知识图谱。
 
     提供统一的记忆存储、检索和知识关联 API。
-    支持批量操作、标签过滤、数据导出/导入。
+    支持批量操作、标签过滤、数据导出/导入、生命周期管理。
 
     Args:
         dimension: 向量维度。如果提供 embedding_provider，可以从 provider 自动推断。
@@ -26,6 +31,11 @@ class HybridMemory:
         storage_backend: 存储后端类型，'json' 或 'sqlite'
         auto_save: 每次 remember/forget 后自动保存
         auto_load: 初始化时自动加载已有数据
+        use_lsh: 是否启用 LSH 近似搜索索引（默认 False）
+        lsh_tables: LSH 哈希表数量（仅 use_lsh=True 时生效）
+        lsh_hyperplanes: LSH 超平面数量（仅 use_lsh=True 时生效）
+        default_ttl: 默认记忆 TTL（秒），None 表示永不过期
+        decay_rate: 时间衰减速率
     """
 
     def __init__(
@@ -36,6 +46,11 @@ class HybridMemory:
         storage_backend: str = "json",
         auto_save: bool = False,
         auto_load: bool = False,
+        use_lsh: bool = False,
+        lsh_tables: int = 8,
+        lsh_hyperplanes: int = 16,
+        default_ttl: Optional[float] = None,
+        decay_rate: float = 0.001,
     ) -> None:
         self._embedding_provider = embedding_provider
 
@@ -53,8 +68,17 @@ class HybridMemory:
         else:
             raise ValueError("必须指定 dimension 或 embedding_provider")
 
-        self.embedding_store = EmbeddingStore(dimension=self._dimension)
+        self.embedding_store = EmbeddingStore(
+            dimension=self._dimension,
+            use_lsh=use_lsh,
+            lsh_tables=lsh_tables,
+            lsh_hyperplanes=lsh_hyperplanes,
+        )
         self.knowledge_graph = KnowledgeGraph()
+        self.lifecycle = MemoryLifecycle(
+            default_ttl=default_ttl,
+            decay_rate=decay_rate,
+        )
         self._storage_path = storage_path
         self._storage_backend = storage_backend
         self._auto_save = auto_save
@@ -116,6 +140,8 @@ class HybridMemory:
         embedding: Optional[list[float]] = None,
         metadata: Optional[dict[str, Any]] = None,
         tags: Optional[list[str]] = None,
+        importance: Optional[float] = None,
+        ttl: Optional[float] = None,
     ) -> Memory:
         """添加一条记忆到存储。
 
@@ -127,6 +153,8 @@ class HybridMemory:
             embedding: 向量表示（可选，有 provider 时自动计算）
             metadata: 附加元数据
             tags: 标签列表
+            importance: 重要性评分（0~1）
+            ttl: 自定义 TTL（秒）
 
         Returns:
             创建的 Memory 对象
@@ -138,8 +166,113 @@ class HybridMemory:
             embedding = self._embedding_provider.embed(content)
         mem = Memory(content=content, embedding=embedding, metadata=metadata or {}, tags=tags or [])
         self.embedding_store.add(mem)
+
+        if importance is not None:
+            self.lifecycle.set_importance(mem.id, importance)
+        if ttl is not None:
+            self.lifecycle.set_ttl(mem.id, ttl)
+
         self._auto_save_if_enabled()
         return mem
+
+    def update_memory(
+        self,
+        memory_id: str,
+        content: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        tags: Optional[list[str]] = None,
+    ) -> Memory:
+        """更新已有记忆。
+
+        如果更新了内容且有 embedding_provider，会自动重新计算向量。
+
+        Args:
+            memory_id: 记忆 ID
+            content: 新内容（可选）
+            metadata: 新元数据（与现有合并）
+            tags: 新标签列表（替换现有）
+
+        Returns:
+            更新后的 Memory
+
+        Raises:
+            KeyError: 记忆不存在
+        """
+        if content is not None and self._embedding_provider is not None:
+            new_embedding = self._embedding_provider.embed(content)
+            mem = self.embedding_store.get(memory_id)
+            if mem is None:
+                raise KeyError(f"Memory {memory_id} 不存在")
+            mem.embedding = new_embedding
+
+        mem = self.embedding_store.update(memory_id, content=content, metadata=metadata, tags=tags)
+        self._auto_save_if_enabled()
+        return mem
+
+    def merge_memories(self, memory_ids: list[str], new_content: Optional[str] = None) -> Memory:
+        """合并多条记忆为一条。
+
+        将多条记忆的内容合并，元数据合并，标签去重合并，
+        保留第一条记忆的 ID，删除其余记忆。
+
+        Args:
+            memory_ids: 要合并的记忆 ID 列表
+            new_content: 合并后的新内容（可选，默认拼接所有内容）
+
+        Returns:
+            合并后的 Memory
+
+        Raises:
+            ValueError: 记忆列表为空
+            KeyError: 任何记忆 ID 不存在
+        """
+        if not memory_ids:
+            raise ValueError("记忆列表不能为空")
+
+        memories: list[Memory] = []
+        for mid in memory_ids:
+            mem = self.embedding_store.get(mid)
+            if mem is None:
+                raise KeyError(f"Memory {mid} 不存在")
+            memories.append(mem)
+
+        # 合并内容
+        if new_content is None:
+            new_content = "\n".join(m.content for m in memories)
+
+        # 合并元数据
+        merged_metadata: dict[str, Any] = {}
+        for m in memories:
+            merged_metadata.update(m.metadata)
+
+        # 合并标签
+        merged_tags: list[str] = []
+        seen: set[str] = set()
+        for m in memories:
+            for tag in m.tags:
+                if tag.lower() not in seen:
+                    merged_tags.append(tag)
+                    seen.add(tag.lower())
+
+        # 更新第一条记忆
+        primary = memories[0]
+        primary.content = new_content
+        primary.metadata = merged_metadata
+        primary.tags = merged_tags
+
+        # 重新计算 embedding
+        if self._embedding_provider is not None:
+            primary.embedding = self._embedding_provider.embed(new_content)
+
+        # 删除其他记忆
+        for m in memories[1:]:
+            try:
+                self.embedding_store.remove(m.id)
+            except KeyError:
+                pass
+
+        self._auto_save_if_enabled()
+        return primary
 
     def batch_remember(
         self,
@@ -190,6 +323,27 @@ class HybridMemory:
         self.embedding_store.remove(memory_id)
         self._auto_save_if_enabled()
 
+    def forget_where(self, predicate: Callable[[Memory], bool]) -> list[str]:
+        """按条件删除记忆。
+
+        Args:
+            predicate: 判断函数，返回 True 的记忆将被删除
+
+        Returns:
+            删除的记忆 ID 列表
+        """
+        to_delete = [m for m in self.embedding_store.list_all() if predicate(m)]
+        deleted: list[str] = []
+        for m in to_delete:
+            try:
+                self.embedding_store.remove(m.id)
+                deleted.append(m.id)
+            except KeyError:
+                pass
+        if deleted:
+            self._auto_save_if_enabled()
+        return deleted
+
     def batch_forget(self, memory_ids: list[str]) -> list[str]:
         """批量删除记忆。
 
@@ -227,7 +381,43 @@ class HybridMemory:
         Returns:
             对应的 Memory，不存在返回 None
         """
-        return self.embedding_store.get(memory_id)
+        mem = self.embedding_store.get(memory_id)
+        if mem is not None:
+            self.lifecycle.record_access(memory_id)
+        return mem
+
+    def get_lifecycle_info(self, memory_id: str) -> Optional[dict[str, Any]]:
+        """获取记忆的生命周期信息。
+
+        Args:
+            memory_id: 记忆 ID
+
+        Returns:
+            生命周期信息字典，记忆不存在返回 None
+        """
+        mem = self.embedding_store.get(memory_id)
+        if mem is None:
+            return None
+        return self.lifecycle.get_lifecycle_info(mem)
+
+    def cleanup_expired(self) -> list[str]:
+        """清理所有过期记忆。
+
+        Returns:
+            被清理的记忆 ID 列表
+        """
+        all_memories = self.embedding_store.list_all()
+        expired_ids: list[str] = []
+        for mem in all_memories:
+            if self.lifecycle.is_expired(mem):
+                try:
+                    self.embedding_store.remove(mem.id)
+                    expired_ids.append(mem.id)
+                except KeyError:
+                    pass
+        if expired_ids:
+            self._auto_save_if_enabled()
+        return expired_ids
 
     # --- 标签管理 ---
 
@@ -360,12 +550,16 @@ class HybridMemory:
         Returns:
             按相似度降序排列的 SearchResult 列表
         """
-        return self.embedding_store.search(
+        results = self.embedding_store.search(
             query=query_embedding,
             top_k=top_k,
             threshold=threshold,
             tags=tags,
         )
+        # 记录搜索访问
+        for r in results:
+            self.lifecycle.record_access(r.memory.id)
+        return results
 
     def batch_search(
         self,
@@ -550,16 +744,18 @@ class HybridMemory:
 
     # --- 统计 ---
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         """返回系统统计信息。
 
         Returns:
-            包含 memory_count, entity_count, relation_count 的字典
+            包含 memory_count, entity_count, relation_count 等的字典
         """
         return {
             "memory_count": self.embedding_store.count(),
             "entity_count": self.knowledge_graph.entity_count(),
             "relation_count": self.knowledge_graph.relation_count(),
+            "use_lsh": self.embedding_store.use_lsh,
+            "dimension": self._dimension,
         }
 
     # --- 导出/导入 ---
@@ -574,7 +770,7 @@ class HybridMemory:
             JSON 字符串
         """
         data = {
-            "version": "1.0",
+            "version": "2.0",
             "stats": self.stats(),
             "memories": [m.to_dict() for m in self.embedding_store.list_all()],
             "entities": [e.to_dict() for e in self.knowledge_graph.find_entities()],
