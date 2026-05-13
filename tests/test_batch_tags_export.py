@@ -440,3 +440,34 @@ class TestTestBatchTagsExport:
         result1 = process(self.fixture, config=self.config)
         result2 = process(self.fixture, config=self.config)
         assert result1 == result2
+
+# [2026-05-13] Tests for test_batch_tags_export
+class TestTestBatchTagsExport:
+    """Test suite for test_batch_tags_export — graph visualization."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_graph_visualization(self):
+        """Test basic graph visualization functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_graph_visualization_with_empty_input(self):
+        """Test graph visualization with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_graph_visualization_error_handling(self):
+        """Test graph visualization error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_graph_visualization_caching(self):
+        """Test graph visualization caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
