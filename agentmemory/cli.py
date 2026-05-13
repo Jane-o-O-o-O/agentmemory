@@ -270,6 +270,91 @@ def cmd_graph(args: argparse.Namespace) -> None:
             print(f"  {src_name} --[{r.relation_type}]--> {tgt_name}")
 
 
+def cmd_graph_export(args: argparse.Namespace) -> None:
+    """导出知识图谱可视化"""
+    from agentmemory.graph_viz import export_dot, export_html
+    mem = _get_memory(args)
+    if args.format == "dot":
+        data = export_dot(mem.knowledge_graph, title=args.title)
+    else:
+        data = export_html(mem.knowledge_graph, title=args.title)
+
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(data)
+        print(f"已导出到: {args.output}")
+    else:
+        print(data)
+
+
+def cmd_graph_stats(args: argparse.Namespace) -> None:
+    """知识图谱统计报告"""
+    from agentmemory.graph_viz import graph_stats_text
+    mem = _get_memory(args)
+    print(graph_stats_text(mem.knowledge_graph))
+
+
+def cmd_cache_stats(args: argparse.Namespace) -> None:
+    """搜索缓存统计"""
+    mem = _get_memory(args)
+    stats = mem.get_cache_stats()
+    if stats is None:
+        print("搜索缓存未启用（使用 --cache-size > 0 启用）")
+        return
+    print(f"缓存命中: {stats['hits']}")
+    print(f"缓存未命中: {stats['misses']}")
+    print(f"命中率: {stats['hit_rate']:.2%}")
+    print(f"当前大小: {stats['size']}/{stats['max_size']}")
+    print(f"TTL: {stats['ttl_seconds']}秒" if stats['ttl_seconds'] else "TTL: 无限制")
+
+
+def cmd_shortest_path(args: argparse.Namespace) -> None:
+    """查找两个实体之间的最短路径"""
+    mem = _get_memory(args)
+    try:
+        path = mem.shortest_path(args.source_id, args.target_id, max_depth=args.max_depth)
+        if path is None:
+            print("不可达：两个实体之间没有路径")
+            return
+        print(f"路径（{len(path)} 步）:")
+        for i, entity in enumerate(path):
+            arrow = "  -> " if i > 0 else "     "
+            print(f"{arrow}{entity.name} ({entity.entity_type}) [{entity.id[:12]}]")
+    except KeyError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_common_neighbors(args: argparse.Namespace) -> None:
+    """查找两个实体的共同邻居"""
+    mem = _get_memory(args)
+    try:
+        neighbors = mem.common_neighbors(args.entity1, args.entity2)
+        if not neighbors:
+            print("没有共同邻居")
+            return
+        print(f"共同邻居 ({len(neighbors)}):")
+        for n in neighbors:
+            print(f"  {n.name} ({n.entity_type}) [{n.id[:12]}]")
+    except KeyError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_connected_components(args: argparse.Namespace) -> None:
+    """列出图谱的连通分量"""
+    mem = _get_memory(args)
+    components = mem.connected_components()
+    if not components:
+        print("知识图谱为空")
+        return
+    print(f"连通分量 ({len(components)}):")
+    for i, comp in enumerate(components):
+        names = [e.name for e in comp[:5]]
+        extra = f" +{len(comp) - 5} more" if len(comp) > 5 else ""
+        print(f"  #{i + 1} ({len(comp)} entities): {', '.join(names)}{extra}")
+
+
 def _get_version() -> str:
     """获取版本号"""
     from agentmemory import __version__
@@ -503,6 +588,38 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("graph", help="查看知识图谱")
     p.add_argument("--entity-id", help="查看特定实体的邻居")
     p.set_defaults(func=cmd_graph)
+
+    # shortest-path
+    p = subparsers.add_parser("shortest-path", help="查找两个实体之间的最短路径")
+    p.add_argument("source_id", help="起始实体 ID")
+    p.add_argument("target_id", help="目标实体 ID")
+    p.add_argument("--max-depth", type=int, default=10, help="最大搜索深度")
+    p.set_defaults(func=cmd_shortest_path)
+
+    # common-neighbors
+    p = subparsers.add_parser("common-neighbors", help="查找两个实体的共同邻居")
+    p.add_argument("entity1", help="第一个实体 ID")
+    p.add_argument("entity2", help="第二个实体 ID")
+    p.set_defaults(func=cmd_common_neighbors)
+
+    # connected-components
+    p = subparsers.add_parser("connected-components", help="列出图谱的连通分量")
+    p.set_defaults(func=cmd_connected_components)
+
+    # graph-export
+    p = subparsers.add_parser("graph-export", help="导出知识图谱可视化")
+    p.add_argument("--format", choices=["dot", "html"], default="html", help="导出格式")
+    p.add_argument("--output", "-o", help="输出文件路径")
+    p.add_argument("--title", default="Knowledge Graph", help="图表标题")
+    p.set_defaults(func=cmd_graph_export)
+
+    # graph-stats
+    p = subparsers.add_parser("graph-stats", help="知识图谱统计报告")
+    p.set_defaults(func=cmd_graph_stats)
+
+    # cache-stats
+    p = subparsers.add_parser("cache-stats", help="搜索缓存统计")
+    p.set_defaults(func=cmd_cache_stats)
 
     # interactive
     p = subparsers.add_parser("interactive", help="交互式 REPL 模式")

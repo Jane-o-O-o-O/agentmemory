@@ -23,6 +23,8 @@ from agentmemory.weighted_search import (
     weighted_search,
 )
 from agentmemory.plugins import PluginRegistry, get_registry
+from agentmemory.search_cache import SearchCache
+from agentmemory.graph_viz import export_dot, export_html, graph_stats_text
 
 __all__ = [
     "Memory", "Entity", "Relation", "SearchResult",
@@ -39,6 +41,8 @@ __all__ = [
     "SearchFilter", "filter_search_results",
     "WeightedScorer", "ScoringWeights", "weighted_search",
     "PluginRegistry", "get_registry",
+    "SearchCache",
+    "export_dot", "export_html", "graph_stats_text",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

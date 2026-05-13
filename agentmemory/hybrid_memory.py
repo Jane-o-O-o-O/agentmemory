@@ -18,6 +18,7 @@ from agentmemory.embedding_provider import EmbeddingProvider
 from agentmemory.lifecycle import MemoryLifecycle
 from agentmemory.search_filter import SearchFilter, filter_search_results
 from agentmemory.weighted_search import WeightedScorer, ScoringWeights
+from agentmemory.search_cache import SearchCache
 
 
 class HybridMemory:
@@ -55,6 +56,8 @@ class HybridMemory:
         decay_rate: float = 0.001,
         weighted_scoring: bool = False,
         scoring_weights: Optional[ScoringWeights] = None,
+        cache_size: int = 0,
+        cache_ttl: Optional[float] = None,
     ) -> None:
         self._embedding_provider = embedding_provider
 
@@ -64,6 +67,11 @@ class HybridMemory:
         self._scorer: Optional[WeightedScorer] = None
         if weighted_scoring:
             self._scorer = WeightedScorer(weights=scoring_weights, decay_rate=decay_rate)
+
+        # 搜索缓存
+        self._cache: Optional[SearchCache] = None
+        if cache_size > 0:
+            self._cache = SearchCache(max_size=cache_size, ttl_seconds=cache_ttl)
 
         # 推断维度
         if dimension is not None and embedding_provider is not None:
@@ -736,13 +744,22 @@ class HybridMemory:
                 "使用 search_text 需要配置 embedding_provider，"
                 "或使用 search(query_embedding=[...]) 直接搜索向量"
             )
+        # 检查缓存
+        if self._cache is not None:
+            cached = self._cache.get(query, top_k=top_k, threshold=threshold, tags=tags)
+            if cached is not None:
+                return cached
         query_embedding = self._embedding_provider.embed(query)
-        return self.search(
+        results = self.search(
             query_embedding=query_embedding,
             top_k=top_k,
             threshold=threshold,
             tags=tags,
         )
+        # 写入缓存
+        if self._cache is not None:
+            self._cache.put(query, results, top_k=top_k, threshold=threshold, tags=tags)
+        return results
 
     def hybrid_search_text(
         self,
@@ -826,6 +843,132 @@ class HybridMemory:
             WeightedScorer 实例，未设置返回 None
         """
         return self._scorer
+
+    # --- 搜索缓存管理 ---
+
+    def get_cache_stats(self) -> Optional[dict[str, Any]]:
+        """获取搜索缓存统计信息。
+
+        Returns:
+            缓存统计字典，未启用缓存返回 None
+        """
+        if self._cache is None:
+            return None
+        return self._cache.stats
+
+    def clear_cache(self) -> int:
+        """清空搜索缓存。
+
+        Returns:
+            被清除的条目数（未启用缓存返回 0）
+        """
+        if self._cache is None:
+            return 0
+        return self._cache.clear()
+
+    # --- 图谱推理 ---
+
+    def shortest_path(
+        self,
+        source_id: str,
+        target_id: str,
+        max_depth: int = 10,
+    ) -> Optional[list[Entity]]:
+        """查找两个实体之间的最短路径。
+
+        Args:
+            source_id: 起始实体 ID
+            target_id: 目标实体 ID
+            max_depth: 最大搜索深度
+
+        Returns:
+            路径上的实体列表（含起始和目标），不可达返回 None
+        """
+        return self.knowledge_graph.shortest_path(source_id, target_id, max_depth=max_depth)
+
+    def find_all_paths(
+        self,
+        source_id: str,
+        target_id: str,
+        max_depth: int = 5,
+        max_paths: int = 10,
+    ) -> list[list[Entity]]:
+        """查找两个实体之间的所有路径。
+
+        Args:
+            source_id: 起始实体 ID
+            target_id: 目标实体 ID
+            max_depth: 最大路径深度
+            max_paths: 最大路径数
+
+        Returns:
+            所有路径的列表
+        """
+        return self.knowledge_graph.find_all_paths(
+            source_id, target_id, max_depth=max_depth, max_paths=max_paths
+        )
+
+    def common_neighbors(
+        self,
+        entity_id_1: str,
+        entity_id_2: str,
+    ) -> list[Entity]:
+        """查找两个实体的共同邻居。
+
+        Args:
+            entity_id_1: 第一个实体 ID
+            entity_id_2: 第二个实体 ID
+
+        Returns:
+            共同邻居实体列表
+        """
+        return self.knowledge_graph.common_neighbors(entity_id_1, entity_id_2)
+
+    def connected_components(self) -> list[list[Entity]]:
+        """查找图谱中的所有连通分量。
+
+        Returns:
+            每个连通分量包含的实体列表
+        """
+        return self.knowledge_graph.connected_components()
+
+    def subgraph(
+        self,
+        entity_ids: set[str],
+    ) -> dict[str, list]:
+        """提取子图。
+
+        Args:
+            entity_ids: 子图包含的实体 ID 集合
+
+        Returns:
+            包含 entities 和 relations 的字典
+        """
+        return self.knowledge_graph.subgraph(entity_ids)
+
+    def export_dot(self, title: str = "Knowledge Graph") -> str:
+        """导出知识图为 Graphviz DOT 格式。
+
+        Args:
+            title: 图表标题
+
+        Returns:
+            DOT 格式字符串
+        """
+        from agentmemory.graph_viz import export_dot
+        return export_dot(self.knowledge_graph, title=title)
+
+    def export_html(self, title: str = "Knowledge Graph") -> str:
+        """导出知识图为交互式 HTML。
+
+        Args:
+            title: 页面标题
+
+        Returns:
+            HTML 字符串
+        """
+        from agentmemory.graph_viz import export_html
+        return export_html(self.knowledge_graph, title=title)
 
     # --- 导出/导入 ---
 

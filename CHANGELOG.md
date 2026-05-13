@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.6.0 (2026-05-13)
+
+### 新增
+- **搜索结果缓存 (SearchCache)**：LRU 缓存加速频繁查询，支持 TTL 过期、命中率统计、向量/文本双模式缓存
+- **知识图谱可视化 (graph_viz)**：导出 Graphviz DOT 格式和交互式 HTML（vis.js Network），支持自定义颜色/布局
+- **图谱统计报告 (graph_stats_text)**：实体/关系类型分布、连通分量、度数统计
+- **ChromaDB 后端 (chromadb_backend)**：可选的 ChromaDB 向量数据库持久化后端，通过插件架构注册
+- **HybridMemory 图谱推理方法**：shortest_path、find_all_paths、common_neighbors、connected_components、subgraph、export_dot、export_html
+- **HybridMemory 缓存管理**：get_cache_stats()、clear_cache()，search_text 自动缓存
+- **CLI 图谱推理命令**：shortest-path、common-neighbors、connected-components、graph-export、graph-stats、cache-stats
+- **SearchCache 集成**：HybridMemory 构造参数 cache_size/cache_ttl，一行代码启用搜索缓存
+
+### 改进
+- README 全面更新：涵盖 v0.5.0 和 v0.6.0 所有功能（加权搜索、图谱推理、插件系统、aiosqlite、缓存、可视化、ChromaDB）
+- __init__.py 导出 SearchCache、export_dot、export_html、graph_stats_text
+- 测试从 345 个增加到 393 个（+14%）
+
+### 内部
+- 版本升级到 0.6.0
+- 新增 search_cache.py、graph_viz.py、chromadb_backend.py 模块
+
+---
+
+## v0.5.0 (2026-05-12)
+
+### 新增
+- **多探针 LSH**：翻转 1~3 位扩大搜索范围，预计算探针模式缓存，大规模数据（1000+）召回率优化
+- **加权搜索 (WeightedScorer)**：融合向量相似度(0.5) + 重要性(0.2) + 时间衰减(0.2) + 访问频率(0.1)
+- **aiosqlite 异步持久化 (AsyncSQLiteBackend)**：真正的 async I/O，适合高并发 RAG 场景
+- **知识图谱推理**：shortest_path(BFS)、find_all_paths(DFS)、common_neighbors、connected_components、subgraph
+- **插件架构 (PluginRegistry)**：统一注册表管理 backends/providers/scorers/search_strategies
+- **HybridMemory 加权搜索集成**：weighted_scoring 参数、set_scorer()/get_scorer() 方法
+
+### 改进
+- 测试从 287 个增加到 345 个（+20%）
+
+### 内部
+- 版本升级到 0.5.0
+- 新增 weighted_search.py、async_persistence.py、plugins.py 模块
+
+---
+
 ## v0.4.0 (2026-05-12)
 
 ### 新增
