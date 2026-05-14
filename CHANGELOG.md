@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.0 (2026-05-14)
+
+### 新增
+- **向量量化集成 (compress_vectors / compressed_search)**：SQ8 标量量化（4x 压缩比）和 PQ 乘积量化集成到 HybridMemory，支持压缩后近似最近邻搜索
+- **RAG 管道集成 (rag())**：一行调用完成检索→重排序→上下文组装→Prompt 生成，支持自定义 token 限制、标签过滤、混合检索
+- **可观测性集成 (metrics_snapshot / health_check)**：MetricsCollector 自动追踪 remember/search/forget 的计数器、计时器、仪表盘指标；HealthChecker 检查记忆存储和 LSH 索引健康状态
+- **指标导出 (metrics_json / metrics_prometheus)**：支持 JSON 和 Prometheus 文本格式导出运行时指标
+- **CLI 新命令**：rag（RAG 检索增强生成）、metrics（运行时指标）、health（健康检查）、compress（向量压缩）
+- **MemorySession 代理**：Session 上下文管理器新增 metrics_snapshot、health_check、rag、compress_vectors、compressed_search 代理方法
+
+### 修复
+- metrics.py check_memory_health/check_lsh_health 使用正确的 stats 字典键（memory_count 替代 total_memories）
+
+### 改进
+- __init__.py 导出 MetricsCollector、Counter、Timer、Gauge、HealthChecker、HealthStatus、HealthCheck、HealthReport、RAGPipeline、Reranker、RAGContext、RAGResult、ContextStrategy、ScalarQuantizer、ProductQuantizer、CompressedVectorStore、QuantizationStats
+- 测试从 393 个增加到 505 个（+28%，+112 个新测试）
+- README 新增 v0.7.0 功能文档和使用示例
+
 ## v0.6.0 (2026-05-13)
 
 ### 新增

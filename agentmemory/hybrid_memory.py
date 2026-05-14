@@ -19,6 +19,14 @@ from agentmemory.lifecycle import MemoryLifecycle
 from agentmemory.search_filter import SearchFilter, filter_search_results
 from agentmemory.weighted_search import WeightedScorer, ScoringWeights
 from agentmemory.search_cache import SearchCache
+from agentmemory.metrics import (
+    MetricsCollector,
+    HealthChecker,
+    HealthStatus,
+    HealthCheck,
+    check_memory_health,
+    check_lsh_health,
+)
 
 
 class HybridMemory:
@@ -103,8 +111,18 @@ class HybridMemory:
         self._auto_save = auto_save
         self._backend = self._create_backend() if storage_path else None
 
+        # 可观测性：指标收集器
+        self._metrics = MetricsCollector(namespace="agentmemory")
+        self._metrics_timer_search = self._metrics.timer("search_latency_ms", "搜索延迟（毫秒）")
+        self._metrics_timer_remember = self._metrics.timer("remember_latency_ms", "记忆添加延迟（毫秒）")
+        self._metrics_counter_remember = self._metrics.counter("remember_count", "记忆添加次数")
+        self._metrics_counter_search = self._metrics.counter("search_count", "搜索次数")
+        self._metrics_counter_forget = self._metrics.counter("forget_count", "删除次数")
+        self._metrics_gauge_memories = self._metrics.gauge("memory_count", "当前记忆数量")
+
         if auto_load and self._backend:
             self.load()
+            self._metrics_gauge_memories.set(self.embedding_store.count())
 
     def _create_backend(self) -> Any:
         """创建持久化后端实例"""
@@ -200,6 +218,7 @@ class HybridMemory:
         Raises:
             ValueError: 没有 embedding 也没有 provider
         """
+        _t = time.time()
         if embedding is None and self._embedding_provider is not None:
             embedding = self._embedding_provider.embed(content)
         mem = Memory(content=content, embedding=embedding, metadata=metadata or {}, tags=tags or [])
@@ -211,6 +230,10 @@ class HybridMemory:
             self.lifecycle.set_ttl(mem.id, ttl)
 
         self._auto_save_if_enabled()
+        elapsed_ms = (time.time() - _t) * 1000
+        self._metrics_timer_remember.record(elapsed_ms)
+        self._metrics_counter_remember.increment()
+        self._metrics_gauge_memories.set(self.embedding_store.count())
         return mem
 
     def update_memory(
@@ -360,6 +383,8 @@ class HybridMemory:
         """
         self.embedding_store.remove(memory_id)
         self._auto_save_if_enabled()
+        self._metrics_counter_forget.increment()
+        self._metrics_gauge_memories.set(self.embedding_store.count())
 
     def forget_where(self, predicate: Callable[[Memory], bool]) -> list[str]:
         """按条件删除记忆。
@@ -744,10 +769,12 @@ class HybridMemory:
                 "使用 search_text 需要配置 embedding_provider，"
                 "或使用 search(query_embedding=[...]) 直接搜索向量"
             )
+        _t = time.time()
         # 检查缓存
         if self._cache is not None:
             cached = self._cache.get(query, top_k=top_k, threshold=threshold, tags=tags)
             if cached is not None:
+                self._metrics_counter_search.increment()
                 return cached
         query_embedding = self._embedding_provider.embed(query)
         results = self.search(
@@ -759,6 +786,9 @@ class HybridMemory:
         # 写入缓存
         if self._cache is not None:
             self._cache.put(query, results, top_k=top_k, threshold=threshold, tags=tags)
+        elapsed_ms = (time.time() - _t) * 1000
+        self._metrics_timer_search.record(elapsed_ms)
+        self._metrics_counter_search.increment()
         return results
 
     def hybrid_search_text(
@@ -1093,6 +1123,212 @@ class HybridMemory:
         return count
 
 
+    # --- 向量量化 ---
+
+    def compress_vectors(
+        self,
+        method: str = "sq8",
+        num_subspaces: int = 8,
+    ) -> dict[str, Any]:
+        """使用量化压缩所有已存储的向量。
+
+        压缩后可通过 compressed_search() 进行近似最近邻搜索，
+        显著减少内存占用。
+
+        Args:
+            method: 量化方法，'sq8'（标量量化 4x 压缩）或 'pq'（乘积量化）
+            num_subspaces: PQ 子空间数量（仅 method='pq' 时有效）
+
+        Returns:
+            压缩统计信息字典
+        """
+        from agentmemory.vector_quantizer import (
+            ScalarQuantizer,
+            ProductQuantizer,
+            CompressedVectorStore,
+        )
+
+        all_mems = self.embedding_store.list_all()
+        vectors = [(m.id, m.embedding) for m in all_mems if m.embedding is not None]
+
+        if not vectors:
+            return {"error": "没有可压缩的向量"}
+
+        dim = self._dimension
+        ids_list = [vid for vid, _ in vectors]
+        vecs_list = [v for _, v in vectors]
+
+        if method == "sq8":
+            quantizer = ScalarQuantizer(dim)
+            quantizer.fit(vecs_list)
+        elif method == "pq":
+            quantizer = ProductQuantizer(dim, num_subspaces=num_subspaces)
+            quantizer.fit(vecs_list)
+        else:
+            raise ValueError(f"不支持的量化方法: {method}，可选: 'sq8', 'pq'")
+
+        compressed_store = CompressedVectorStore(quantizer)
+        for vid, vec in zip(ids_list, vecs_list):
+            compressed_store.add(vid, vec)
+
+        self._compressed_store = compressed_store
+        self._compressed_method = method
+
+        stats = compressed_store.stats()
+        return {
+            "method": stats["method"],
+            "num_vectors": stats["num_vectors"],
+            "compression_ratio": round(stats["compression_ratio"], 2),
+            "compressed_bytes_per_vector": stats["compressed_bytes_per_vector"],
+            "total_compressed_bytes": stats["total_compressed_bytes"],
+        }
+
+    def compressed_search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+    ) -> list[SearchResult]:
+        """在压缩向量上执行近似最近邻搜索。
+
+        需先调用 compress_vectors() 创建压缩索引。
+
+        Args:
+            query_embedding: 查询向量
+            top_k: 返回前 k 个结果
+
+        Returns:
+            SearchResult 列表（近似分数）
+
+        Raises:
+            RuntimeError: 未调用 compress_vectors()
+        """
+        if not hasattr(self, "_compressed_store") or self._compressed_store is None:
+            raise RuntimeError("请先调用 compress_vectors() 创建压缩索引")
+
+        # 将查询向量量化再反量化以对齐精度
+        quantizer = self._compressed_store._quantizer
+        compressed_query = quantizer.quantize(query_embedding)
+        approx_query = quantizer.dequantize(compressed_query)
+
+        from agentmemory.embedding_store import cosine_similarity
+
+        scored: list[tuple[float, str]] = []
+        for vid in self._compressed_store.list_ids():
+            approx_vec = self._compressed_store.get(vid)
+            if approx_vec is not None:
+                sim = cosine_similarity(approx_query, approx_vec)
+                scored.append((sim, vid))
+
+        scored.sort(reverse=True)
+        results: list[SearchResult] = []
+        for score, vid in scored[:top_k]:
+            mem = self.embedding_store.get(vid)
+            if mem is not None:
+                results.append(SearchResult(memory=mem, score=score))
+        return results
+
+    # --- 可观测性 ---
+
+    def metrics_snapshot(self) -> dict[str, Any]:
+        """获取运行时指标快照。
+
+        Returns:
+            包含 counters、timers、gauges 的完整指标字典
+        """
+        return self._metrics.snapshot()
+
+    def metrics_json(self, indent: int = 2) -> str:
+        """导出指标为 JSON 字符串。
+
+        Args:
+            indent: 缩进空格数
+
+        Returns:
+            JSON 格式的指标字符串
+        """
+        return self._metrics.export_json(indent=indent)
+
+    def metrics_prometheus(self) -> str:
+        """导出指标为 Prometheus 文本格式。
+
+        Returns:
+            Prometheus 文本格式的指标
+        """
+        return self._metrics.export_prometheus()
+
+    def health_check(self) -> dict[str, Any]:
+        """执行综合健康检查。
+
+        检查记忆存储和 LSH 索引的健康状态。
+
+        Returns:
+            包含 overall_status 和 checks 的健康报告字典
+        """
+        checker = HealthChecker(name="agentmemory")
+        checker.add_check(check_memory_health(self))
+        checker.add_check(check_lsh_health(self))
+        report = checker.report()
+        return {
+            "overall_status": report.overall_status.value,
+            "checks": [
+                {
+                    "name": c.name,
+                    "status": c.status.value,
+                    "message": c.message,
+                    "details": c.details,
+                }
+                for c in report.checks
+            ],
+            "timestamp": report.timestamp,
+        }
+
+    # --- RAG 管道 ---
+
+    def rag(
+        self,
+        query: str,
+        top_k: int = 5,
+        max_context_tokens: int = 2000,
+        tags: Optional[list[str]] = None,
+        use_hybrid: bool = False,
+    ) -> dict[str, Any]:
+        """执行 RAG（检索增强生成）管道。
+
+        检索相关记忆 → 重排序 → 上下文组装 → Prompt 生成。
+
+        Args:
+            query: 用户查询
+            top_k: 检索结果数量
+            max_context_tokens: 上下文最大 token 数
+            tags: 标签过滤
+            use_hybrid: 是否使用混合检索（向量+图谱）
+
+        Returns:
+            包含 prompt、context、sources、timing 的结果字典
+        """
+        from agentmemory.rag_pipeline import RAGPipeline, Reranker
+
+        pipeline = RAGPipeline(
+            memory=self,
+            max_context_tokens=max_context_tokens,
+            top_k=top_k,
+            reranker=Reranker(freshness_weight=0.2),
+        )
+        result = pipeline.run(query=query, top_k=top_k, tags=tags, use_hybrid=use_hybrid)
+        return {
+            "prompt": result.prompt,
+            "context_text": result.context.text,
+            "sources": [
+                {"id": s.id, "content": s.content[:100]}
+                for s in result.context.sources
+            ],
+            "total_tokens": result.context.total_tokens,
+            "truncated": result.context.truncated,
+            "reranked": result.reranked,
+            "pipeline_time_ms": round(result.pipeline_time_ms, 2),
+        }
+
+
 class MemorySession:
     """记忆会话上下文管理器。
 
@@ -1180,3 +1416,31 @@ class MemorySession:
         base_stats = self._memory.stats()
         base_stats["session_operations"] = self._operations_count
         return base_stats
+
+    def metrics_snapshot(self):
+        """代理 HybridMemory.metrics_snapshot"""
+        return self._memory.metrics_snapshot()
+
+    def metrics_json(self, *args, **kwargs):
+        """代理 HybridMemory.metrics_json"""
+        return self._memory.metrics_json(*args, **kwargs)
+
+    def metrics_prometheus(self):
+        """代理 HybridMemory.metrics_prometheus"""
+        return self._memory.metrics_prometheus()
+
+    def health_check(self):
+        """代理 HybridMemory.health_check"""
+        return self._memory.health_check()
+
+    def rag(self, *args, **kwargs):
+        """代理 HybridMemory.rag"""
+        return self._memory.rag(*args, **kwargs)
+
+    def compress_vectors(self, *args, **kwargs):
+        """代理 HybridMemory.compress_vectors"""
+        return self._memory.compress_vectors(*args, **kwargs)
+
+    def compressed_search(self, *args, **kwargs):
+        """代理 HybridMemory.compressed_search"""
+        return self._memory.compressed_search(*args, **kwargs)
