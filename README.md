@@ -28,6 +28,9 @@
 | **Embedding Provider** | 内置 Hash/可选 OpenAI/HuggingFace |
 | **插件架构** | PluginRegistry 统一管理后端/Provider/评分策略 |
 | **ChromaDB 后端** | 可选 ChromaDB 向量数据库后端（需安装 chromadb） |
+| **向量量化压缩** | SQ8 标量量化（4x 压缩）/ PQ 乘积量化，近似最近邻搜索 |
+| **RAG 管道** | 检索→重排序→上下文组装→Prompt 生成的完整 RAG 流程 |
+| **可观测性** | MetricsCollector（计数器/计时器/仪表盘）+ 健康检查 + Prometheus 导出 |
 | **JSON/SQLite 持久化** | 人类可读文件或高性能数据库 |
 | **CLI 工具** | 命令行管理记忆（含 interactive/batch-import/visualize/graph） |
 | **导入/导出** | JSON/CSV 格式数据迁移 |
@@ -568,13 +571,90 @@ agentmemory/
 │   ├── weighted_search.py     # 加权搜索排序
 │   ├── plugins.py             # 插件注册架构
 │   ├── graph_viz.py           # 知识图谱可视化（DOT/HTML）
-│   └── cli.py                 # 命令行工具（含 graph 推理命令）
+│   ├── vector_quantizer.py    # 向量量化（SQ8/PQ 压缩）
+│   ├── rag_pipeline.py        # RAG 检索增强生成管道
+│   ├── metrics.py             # 可观测性（指标/健康检查/Prometheus）
+│   └── cli.py                 # 命令行工具（含 graph/RAG/metrics 命令）
 ├── tests/
 │   ├── test_*.py              # 测试文件
 │   └── benchmark.py           # 性能基准测试
 ├── pyproject.toml
 ├── CHANGELOG.md
 └── README.md
+```
+
+---
+
+---
+
+## 🆕 v0.7.0 — 向量量化、RAG 管道、可观测性
+
+### 向量量化压缩
+
+```python
+from agentmemory import HybridMemory, HashEmbeddingProvider
+
+mem = HybridMemory(dimension=128, embedding_provider=HashEmbeddingProvider(128))
+for i in range(100):
+    mem.remember(f"memory item {i}")
+
+# SQ8 标量量化（4x 压缩比）
+stats = mem.compress_vectors(method="sq8")
+print(f"压缩比: {stats['compression_ratio']}x")
+
+# 在压缩向量上执行近似搜索
+results = mem.compressed_search(query_embedding=[0.1]*128, top_k=5)
+
+# PQ 乘积量化（更高压缩比）
+stats = mem.compress_vectors(method="pq", num_subspaces=8)
+```
+
+### RAG 管道
+
+```python
+mem = HybridMemory(dimension=128, embedding_provider=HashEmbeddingProvider(128))
+mem.remember("Python 是一种编程语言")
+mem.remember("机器学习使用算法从数据中学习")
+
+# 一行调用 RAG：检索→重排序→上下文组装→Prompt 生成
+result = mem.rag("什么是编程语言", top_k=3, max_context_tokens=2000)
+print(result["prompt"])       # 完整的 RAG prompt
+print(result["sources"])      # 引用的记忆来源
+print(result["total_tokens"]) # token 估算
+```
+
+### 可观测性
+
+```python
+# 运行时指标（自动追踪 remember/search/forget）
+mem.remember("test")
+mem.search_text("test")
+snap = mem.metrics_snapshot()
+print(snap["counters"]["remember_count"])  # {"value": 1, ...}
+print(snap["timers"]["search_latency_ms"]) # {"count": 1, "mean_ms": ...}
+
+# Prometheus 导出
+print(mem.metrics_prometheus())
+
+# 健康检查
+report = mem.health_check()
+print(report["overall_status"])  # "healthy"
+```
+
+### CLI 新命令
+
+```bash
+# RAG 查询
+agentmemory rag "什么是编程语言" --top-k 3
+
+# 运行时指标
+agentmemory metrics --format json
+
+# 健康检查
+agentmemory health
+
+# 向量压缩
+agentmemory compress --method sq8
 ```
 
 ---

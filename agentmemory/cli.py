@@ -361,6 +361,86 @@ def _get_version() -> str:
     return __version__
 
 
+def cmd_rag(args: argparse.Namespace) -> None:
+    """执行 RAG 检索增强生成"""
+    mem = _get_memory(args)
+    result = mem.rag(
+        query=args.query,
+        top_k=args.top_k,
+        max_context_tokens=args.max_tokens,
+        tags=args.tags or None,
+        use_hybrid=getattr(args, 'hybrid', False),
+    )
+    if getattr(args, 'prompt_only', False):
+        print(result["prompt"])
+    else:
+        output = {
+            "prompt": result["prompt"],
+            "sources": result["sources"],
+            "total_tokens": result["total_tokens"],
+            "truncated": result["truncated"],
+            "reranked": result["reranked"],
+            "pipeline_time_ms": result["pipeline_time_ms"],
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+def cmd_metrics(args: argparse.Namespace) -> None:
+    """显示运行时指标"""
+    mem = _get_memory(args)
+    fmt = getattr(args, 'format', 'text')
+    if fmt == 'json':
+        print(mem.metrics_json())
+    elif fmt == 'prometheus':
+        print(mem.metrics_prometheus())
+    else:
+        snap = mem.metrics_snapshot()
+        print("=" * 40)
+        print("  agentmemory 运行时指标")
+        print("=" * 40)
+        print(f"\n  计数器:")
+        for name, info in snap.get("counters", {}).items():
+            print(f"    {name}: {info['value']}")
+        print(f"\n  计时器:")
+        for name, info in snap.get("timers", {}).items():
+            print(f"    {name}: count={info['count']} mean={info['mean_ms']:.2f}ms p50={info['p50_ms']:.2f}ms p95={info['p95_ms']:.2f}ms")
+        print(f"\n  仪表盘:")
+        for name, info in snap.get("gauges", {}).items():
+            print(f"    {name}: {info['value']}")
+        print()
+
+
+def cmd_health(args: argparse.Namespace) -> None:
+    """执行健康检查"""
+    mem = _get_memory(args)
+    report = mem.health_check()
+    status_icons = {"healthy": "✅", "degraded": "⚠️", "unhealthy": "❌"}
+    overall = report["overall_status"]
+    print(f"总体状态: {status_icons.get(overall, '?')} {overall}")
+    print()
+    for check in report["checks"]:
+        icon = status_icons.get(check["status"], "?")
+        print(f"  {icon} {check['name']}: {check['message']}")
+        if check.get("details"):
+            for k, v in check["details"].items():
+                print(f"     {k}: {v}")
+
+
+def cmd_compress(args: argparse.Namespace) -> None:
+    """压缩向量存储"""
+    mem = _get_memory(args)
+    method = args.method
+    stats = mem.compress_vectors(method=method, num_subspaces=args.subspaces)
+    if "error" in stats:
+        print(f"错误: {stats['error']}", file=sys.stderr)
+        sys.exit(1)
+    print(f"压缩方法: {stats['method']}")
+    print(f"向量数量: {stats['num_vectors']}")
+    print(f"压缩比: {stats['compression_ratio']}x")
+    print(f"每向量字节: {stats['compressed_bytes_per_vector']}")
+    print(f"总压缩字节: {stats['total_compressed_bytes']}")
+
+
 def cmd_interactive(args: argparse.Namespace) -> None:
     """交互式 REPL 模式"""
     mem = _get_memory(args)
@@ -634,6 +714,31 @@ def build_parser() -> argparse.ArgumentParser:
     # visualize
     p = subparsers.add_parser("visualize", help="文本可视化统计")
     p.set_defaults(func=cmd_visualize)
+
+    # rag
+    p = subparsers.add_parser("rag", help="RAG 检索增强生成")
+    p.add_argument("query", help="查询文本")
+    p.add_argument("--top-k", type=int, default=5, help="检索数量 (默认: 5)")
+    p.add_argument("--max-tokens", type=int, default=2000, help="上下文最大 token 数")
+    p.add_argument("--tags", nargs="*", help="标签过滤")
+    p.add_argument("--hybrid", action="store_true", help="使用混合检索")
+    p.add_argument("--prompt-only", action="store_true", help="只输出 prompt")
+    p.set_defaults(func=cmd_rag)
+
+    # metrics
+    p = subparsers.add_parser("metrics", help="运行时指标")
+    p.add_argument("--format", choices=["text", "json", "prometheus"], default="text", help="输出格式")
+    p.set_defaults(func=cmd_metrics)
+
+    # health
+    p = subparsers.add_parser("health", help="健康检查")
+    p.set_defaults(func=cmd_health)
+
+    # compress
+    p = subparsers.add_parser("compress", help="压缩向量存储")
+    p.add_argument("--method", choices=["sq8", "pq"], default="sq8", help="量化方法")
+    p.add_argument("--subspaces", type=int, default=8, help="PQ 子空间数量")
+    p.set_defaults(func=cmd_compress)
 
     return parser
 
