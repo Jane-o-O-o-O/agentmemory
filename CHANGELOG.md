@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.0.0 (2026-05-15)
+
+### 新增
+- **FastAPI REST API (api.py)**：21个RESTful端点覆盖记忆CRUD、文本/混合搜索、批量操作、知识图谱、RAG管道、快照管理、健康检查、指标导出；Pydantic请求/响应校验；API Key认证（X-API-Key）；CORS跨域支持；OpenAPI自动文档（/docs）
+- **多格式导入导出 (import_export.py)**：5种格式——JSON、JSONL、MemoryBank（.mbk/.jsonl）、Markdown表格、完整导出（含实体+关系）；ExportManager统一管理；文件自动格式检测
+- **扩展Embedding Provider (embedding_providers_ext.py)**：CohereEmbeddingProvider（4种模型）、VoyageEmbeddingProvider（6种模型）、RemoteEmbeddingProvider（通用HTTP端点）
+- **CLI serve命令**：`agentmemory serve` 启动Web API服务器，支持 --host/--port/--api-keys/--cors/--log-level
+- **pyproject.toml**：新增 api/cohere/voyage/all 可选依赖组
+
+### 改进
+- __init__.py 导出所有新模块（ExportManager、CohereEmbeddingProvider、VoyageEmbeddingProvider、RemoteEmbeddingProvider、MemoryBankFormat等）
+- 项目版本升级至 1.0.0
+- 测试从 603 个增加到 788 个（+31%，+185 个新测试）
+- 代码量从 12279 行增至 15955 行
+
+
 ## v0.9.0 (2026-05-15)
 
 ### 新增
