@@ -665,6 +665,34 @@ def cmd_gc(args: argparse.Namespace) -> None:
         print(json.dumps(stats, ensure_ascii=False, indent=2))
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    """启动 Web API 服务器。
+
+    Args:
+        args: 解析后的命令行参数
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        print("请安装 uvicorn: pip install uvicorn", file=sys.stderr)
+        sys.exit(1)
+
+    from agentmemory.api import create_app
+    from agentmemory.embedding_provider import HashEmbeddingProvider
+
+    mem = _get_memory(args)
+    api_keys = args.api_keys if args.api_keys else None
+    cors = args.cors if args.cors else None
+
+    app = create_app(memory=mem, api_keys=api_keys, cors_origins=cors)
+    print(f"启动 agentmemory API 服务...")
+    print(f"  地址: http://{args.host}:{args.port}")
+    print(f"  文档: http://{args.host}:{args.port}/docs")
+    if api_keys:
+        print(f"  API Key 认证: 已启用")
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。
 
@@ -862,6 +890,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-age", type=float, default=None, help="最大存活时间（秒）")
     p.add_argument("--batch-size", type=int, default=100, help="每批清理数量")
     p.set_defaults(func=cmd_gc)
+
+    # serve
+    p = subparsers.add_parser("serve", help="启动 Web API 服务器")
+    p.add_argument("--host", default="127.0.0.1", help="监听地址 (默认: 127.0.0.1)")
+    p.add_argument("--port", "-p", type=int, default=8000, help="监听端口 (默认: 8000)")
+    p.add_argument("--api-keys", nargs="*", help="启用 API Key 认证")
+    p.add_argument("--cors", nargs="*", help="CORS 允许的源")
+    p.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"], help="日志级别")
+    p.set_defaults(func=cmd_serve)
 
     return parser
 
