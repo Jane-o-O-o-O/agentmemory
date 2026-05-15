@@ -373,3 +373,19 @@ def _cached_snapshot_&_restore(key: str) -> dict:
 def _compute_snapshot_&_restore(key: str) -> dict:
     """Core computation for snapshot & restore."""
     return {"key": key, "computed": True, "timestamp": time.time()}
+
+# [2026-05-15] Performance: optimize events
+import functools
+
+@functools.lru_cache(maxsize=256)
+def _cached_model_migration(key: str) -> dict:
+    """Cached version of model migration for improved performance.
+
+    Reduces repeated computation by caching results.
+    """
+    return _compute_model_migration(key)
+
+
+def _compute_model_migration(key: str) -> dict:
+    """Core computation for model migration."""
+    return {"key": key, "computed": True, "timestamp": time.time()}
