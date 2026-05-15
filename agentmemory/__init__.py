@@ -111,6 +111,18 @@ from agentmemory.benchmarks import (
     run_benchmark,
     run_all,
 )
+from agentmemory.import_export import (
+    MemoryBankFormat,
+    JSONLExporter,
+    FullExportFormat,
+    MarkdownExporter,
+    ExportManager,
+)
+from agentmemory.embedding_providers_ext import (
+    CohereEmbeddingProvider,
+    VoyageEmbeddingProvider,
+    RemoteEmbeddingProvider,
+)
 
 __all__ = [
     "Memory", "Entity", "Relation", "SearchResult",
@@ -157,6 +169,10 @@ __all__ = [
     "GarbageCollector", "GCPolicy", "GCResult",
     # v0.9.0: 基准测试
     "BenchmarkResult", "BenchmarkSuite", "run_benchmark", "run_all",
+    # v1.0.0: 导入/导出
+    "MemoryBankFormat", "JSONLExporter", "FullExportFormat", "MarkdownExporter", "ExportManager",
+    # v1.0.0: 扩展 Embedding Provider
+    "CohereEmbeddingProvider", "VoyageEmbeddingProvider", "RemoteEmbeddingProvider",
 ]
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"

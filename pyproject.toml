@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "agentmemory"
-version = "0.9.0"
+version = "1.0.0"
 description = "混合记忆框架：向量搜索 + 知识图谱"
 readme = "README.md"
 license = {text = "MIT"}
@@ -30,10 +30,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+]
+cohere = [
+    "cohere>=5.0.0",
+]
+voyage = [
+    "voyageai>=0.2.0",
+]
+all = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "cohere>=5.0.0",
+    "voyageai>=0.2.0",
+    "httpx>=0.24.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.21",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "httpx>=0.24.0",
 ]
 
 [project.urls]
