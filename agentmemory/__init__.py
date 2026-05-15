@@ -48,6 +48,69 @@ from agentmemory.vector_quantizer import (
     CompressedVectorStore,
     QuantizationStats,
 )
+from agentmemory.consolidator import (
+    MemoryConsolidator,
+    ConsolidationResult,
+)
+from agentmemory.snapshot import (
+    SnapshotManager,
+    SnapshotMetadata,
+    SnapshotDiff,
+)
+from agentmemory.namespace import (
+    Namespace,
+    NamespaceManager,
+)
+from agentmemory.events import (
+    EventBus,
+    EventType,
+    EventContext,
+    EventHandler,
+    get_event_bus,
+    reset_event_bus,
+)
+from agentmemory.analytics import (
+    MemoryAnalyzer,
+    MemoryReport,
+    AccessPattern,
+    TemporalDistribution,
+    TagCloud,
+    ContentAnalysis,
+)
+from agentmemory.streaming import (
+    StreamingSearcher,
+    SearchProgress,
+    StreamConfig,
+    stream_search,
+)
+from agentmemory.config import (
+    AgentMemoryConfig,
+    VectorConfig,
+    StorageConfig,
+    LifecycleConfig,
+    CacheConfig,
+    GCConfig,
+    load_config,
+    get_profile,
+    PROFILES,
+)
+from agentmemory.middleware import (
+    MiddlewarePipeline,
+    HookContext,
+    HookType,
+    BuiltinMiddleware,
+)
+from agentmemory.gc import (
+    GarbageCollector,
+    GCPolicy,
+    GCResult,
+)
+from agentmemory.benchmarks import (
+    BenchmarkResult,
+    BenchmarkSuite,
+    run_benchmark,
+    run_all,
+)
 
 __all__ = [
     "Memory", "Entity", "Relation", "SearchResult",
@@ -73,6 +136,27 @@ __all__ = [
     "RAGPipeline", "Reranker", "RAGContext", "RAGResult", "ContextStrategy",
     # v0.7.0: 向量量化
     "ScalarQuantizer", "ProductQuantizer", "CompressedVectorStore", "QuantizationStats",
+    # v0.8.0: 记忆整合
+    "MemoryConsolidator", "ConsolidationResult",
+    # v0.8.0: 快照系统
+    "SnapshotManager", "SnapshotMetadata", "SnapshotDiff",
+    # v0.8.0: 命名空间
+    "Namespace", "NamespaceManager",
+    # v0.8.0: 事件系统
+    "EventBus", "EventType", "EventContext", "EventHandler", "get_event_bus", "reset_event_bus",
+    # v0.8.0: 分析系统
+    "MemoryAnalyzer", "MemoryReport", "AccessPattern", "TemporalDistribution", "TagCloud", "ContentAnalysis",
+    # v0.8.0: 流式搜索
+    "StreamingSearcher", "SearchProgress", "StreamConfig", "stream_search",
+    # v0.9.0: 配置系统
+    "AgentMemoryConfig", "VectorConfig", "StorageConfig", "LifecycleConfig",
+    "CacheConfig", "GCConfig", "load_config", "get_profile", "PROFILES",
+    # v0.9.0: 中间件
+    "MiddlewarePipeline", "HookContext", "HookType", "BuiltinMiddleware",
+    # v0.9.0: 垃圾回收
+    "GarbageCollector", "GCPolicy", "GCResult",
+    # v0.9.0: 基准测试
+    "BenchmarkResult", "BenchmarkSuite", "run_benchmark", "run_all",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.9.0"

@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.9.0 (2026-05-15)
+
+### 新增
+- **集中化配置系统 (config.py)**：AgentMemoryConfig dataclass，支持嵌套配置（VectorConfig/StorageConfig/LifecycleConfig/CacheConfig/GCConfig）、配置验证、环境变量覆盖（AGENTMEMORY_ 前缀）、预定义 Profile（dev/test/prod）
+- **可组合中间件管道 (middleware.py)**：MiddlewarePipeline 支持 pre/post hooks，按优先级排序执行，可变换数据或阻断操作；内置中间件：timing、content_validator、rate_limiter、audit_log
+- **内存垃圾回收器 (gc.py)**：GarbageCollector 基于多种策略自动清理低价值记忆——TTL 过期、重要性阈值、最大存活时间、空闲时间；支持 preview 预览和 batch_size 限制
+- **内置性能基准测试 (benchmarks.py)**：BenchmarkSuite 框架，含 EmbeddingStore/KnowledgeGraph/LSHIndex/HybridMemory 四组基准，统计 ops/s、P50/P95/P99 延迟
+- **CLI 新命令**：config（配置查看/profiles/验证）、benchmark（性能测试，支持 vector/graph/lsh/hybrid/all）、gc（垃圾回收 preview/run/stats）
+
+### 改进
+- __init__.py 导出所有新模块（AgentMemoryConfig、MiddlewarePipeline、GarbageCollector、BenchmarkSuite 等）
+- pyproject.toml 版本同步至 0.9.0
+- 测试从 505 个增加到 603 个（+19%，+98 个新测试）
+
+
 ## v0.7.0 (2026-05-14)
 
 ### 新增

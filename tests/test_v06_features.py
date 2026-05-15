@@ -628,7 +628,7 @@ class TestVersionAndIntegration:
 
     def test_version(self):
         """版本号"""
-        assert __version__ == "0.7.0"
+        assert __version__ == "0.9.0"
 
     def test_full_workflow(self):
         """完整工作流：记忆+图谱+缓存+可视化"""
