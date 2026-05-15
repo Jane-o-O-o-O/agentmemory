@@ -120,6 +120,22 @@ class HybridMemory:
         self._metrics_counter_forget = self._metrics.counter("forget_count", "删除次数")
         self._metrics_gauge_memories = self._metrics.gauge("memory_count", "当前记忆数量")
 
+        # 事件系统
+        from agentmemory.events import EventBus, EventType
+        self._event_bus = EventBus()
+
+        # 快照管理器（惰性创建）
+        self._snapshot_manager = None
+
+        # 命名空间管理器（惰性创建）
+        self._namespace_manager = None
+
+        # 整合器（惰性创建）
+        self._consolidator = None
+
+        # 分析器（惰性创建）
+        self._analyzer = None
+
         if auto_load and self._backend:
             self.load()
             self._metrics_gauge_memories.set(self.embedding_store.count())
@@ -219,6 +235,12 @@ class HybridMemory:
             ValueError: 没有 embedding 也没有 provider
         """
         _t = time.time()
+        # 触发 before 事件
+        from agentmemory.events import EventType
+        ctx = self._event_bus.emit(EventType.BEFORE_REMEMBER, {"content": content})
+        if ctx.cancelled:
+            raise ValueError("remember 操作被事件处理器取消")
+
         if embedding is None and self._embedding_provider is not None:
             embedding = self._embedding_provider.embed(content)
         mem = Memory(content=content, embedding=embedding, metadata=metadata or {}, tags=tags or [])
@@ -234,6 +256,9 @@ class HybridMemory:
         self._metrics_timer_remember.record(elapsed_ms)
         self._metrics_counter_remember.increment()
         self._metrics_gauge_memories.set(self.embedding_store.count())
+
+        # 触发 after 事件
+        self._event_bus.emit(EventType.AFTER_REMEMBER, {"memory_id": mem.id, "content": content})
         return mem
 
     def update_memory(
@@ -381,10 +406,17 @@ class HybridMemory:
         Raises:
             KeyError: 记忆不存在
         """
+        from agentmemory.events import EventType
+        ctx = self._event_bus.emit(EventType.BEFORE_FORGET, {"memory_id": memory_id})
+        if ctx.cancelled:
+            raise ValueError("forget 操作被事件处理器取消")
+
         self.embedding_store.remove(memory_id)
         self._auto_save_if_enabled()
         self._metrics_counter_forget.increment()
         self._metrics_gauge_memories.set(self.embedding_store.count())
+
+        self._event_bus.emit(EventType.AFTER_FORGET, {"memory_id": memory_id})
 
     def forget_where(self, predicate: Callable[[Memory], bool]) -> list[str]:
         """按条件删除记忆。
@@ -770,6 +802,9 @@ class HybridMemory:
                 "或使用 search(query_embedding=[...]) 直接搜索向量"
             )
         _t = time.time()
+        from agentmemory.events import EventType
+        self._event_bus.emit(EventType.BEFORE_SEARCH, {"query": query, "top_k": top_k})
+
         # 检查缓存
         if self._cache is not None:
             cached = self._cache.get(query, top_k=top_k, threshold=threshold, tags=tags)
@@ -789,6 +824,7 @@ class HybridMemory:
         elapsed_ms = (time.time() - _t) * 1000
         self._metrics_timer_search.record(elapsed_ms)
         self._metrics_counter_search.increment()
+        self._event_bus.emit(EventType.AFTER_SEARCH, {"query": query, "result_count": len(results), "elapsed_ms": elapsed_ms})
         return results
 
     def hybrid_search_text(
@@ -1329,6 +1365,314 @@ class HybridMemory:
         }
 
 
+    # --- v0.8.0: 事件系统 ---
+
+    @property
+    def event_bus(self):
+        """获取事件总线实例。
+
+        Returns:
+            EventBus 实例
+        """
+        return self._event_bus
+
+    def on_event(self, event_type, callback, priority: int = 0, name: str = ""):
+        """注册事件处理器的便捷方法。
+
+        Args:
+            event_type: EventType 枚举值
+            callback: 回调函数 (EventContext) -> None
+            priority: 优先级（越小越先执行）
+            name: 处理器名称
+
+        Returns:
+            EventHandler 实例
+        """
+        return self._event_bus.on(event_type, callback, priority=priority, name=name)
+
+    # --- v0.8.0: 快照系统 ---
+
+    def create_snapshot(self, name: str = None, description: str = ""):
+        """创建记忆状态快照。
+
+        Args:
+            name: 快照名称（默认自动生成）
+            description: 快照描述
+
+        Returns:
+            SnapshotMetadata 元数据
+        """
+        from agentmemory.snapshot import SnapshotManager
+        if self._snapshot_manager is None:
+            self._snapshot_manager = SnapshotManager()
+        return self._snapshot_manager.create(self, name=name, description=description)
+
+    def restore_snapshot(self, snapshot_id_or_name: str):
+        """恢复到指定快照。
+
+        Args:
+            snapshot_id_or_name: 快照 ID 或名称
+
+        Returns:
+            恢复的快照 SnapshotMetadata
+        """
+        from agentmemory.snapshot import SnapshotManager
+        if self._snapshot_manager is None:
+            raise RuntimeError("没有可用快照，请先调用 create_snapshot()")
+        return self._snapshot_manager.restore(self, snapshot_id_or_name)
+
+    def list_snapshots(self) -> list:
+        """列出所有快照。
+
+        Returns:
+            SnapshotMetadata 列表
+        """
+        if self._snapshot_manager is None:
+            return []
+        return self._snapshot_manager.list_snapshots()
+
+    def diff_snapshots(self, snap_a: str, snap_b: str):
+        """比较两个快照的差异。
+
+        Args:
+            snap_a: 快照 A 的 ID 或名称
+            snap_b: 快照 B 的 ID 或名称
+
+        Returns:
+            SnapshotDiff 差异对象
+        """
+        if self._snapshot_manager is None:
+            raise RuntimeError("没有可用快照")
+        return self._snapshot_manager.diff(snap_a, snap_b)
+
+    def delete_snapshot(self, snapshot_id_or_name: str) -> bool:
+        """删除快照。
+
+        Args:
+            snapshot_id_or_name: 快照 ID 或名称
+
+        Returns:
+            是否成功删除
+        """
+        if self._snapshot_manager is None:
+            raise RuntimeError("没有可用快照")
+        return self._snapshot_manager.delete(snapshot_id_or_name)
+
+    # --- v0.8.0: 整合系统 ---
+
+    def deduplicate(self, similarity_threshold: float = 0.92):
+        """自动去重：合并高度相似的记忆。
+
+        Args:
+            similarity_threshold: 相似度阈值
+
+        Returns:
+            ConsolidationResult 整合结果
+        """
+        from agentmemory.consolidator import MemoryConsolidator
+        consolidator = MemoryConsolidator(similarity_threshold=similarity_threshold)
+        result = consolidator.deduplicate(self.embedding_store)
+        self._auto_save_if_enabled()
+        self._metrics_gauge_memories.set(self.embedding_store.count())
+        return result
+
+    def merge_similar_memories(self, threshold: float = 0.85, max_merge_size: int = 5):
+        """合并相似记忆为摘要。
+
+        Args:
+            threshold: 相似度阈值
+            max_merge_size: 每个聚类最多合并的记忆数
+
+        Returns:
+            ConsolidationResult 整合结果
+        """
+        from agentmemory.consolidator import MemoryConsolidator
+        consolidator = MemoryConsolidator(similarity_threshold=threshold)
+        result = consolidator.merge_similar(
+            self.embedding_store, threshold=threshold, max_merge_size=max_merge_size
+        )
+        self._auto_save_if_enabled()
+        self._metrics_gauge_memories.set(self.embedding_store.count())
+        return result
+
+    def compress_aged_memories(self, min_age_hours: float = 24.0, max_content_length: int = 200):
+        """压缩老旧记忆内容。
+
+        Args:
+            min_age_hours: 最小年龄（小时）
+            max_content_length: 压缩后最大内容长度
+
+        Returns:
+            ConsolidationResult 整合结果
+        """
+        from agentmemory.consolidator import MemoryConsolidator
+        consolidator = MemoryConsolidator(max_content_length=max_content_length)
+        result = consolidator.compress_aged(self.embedding_store, self.lifecycle, min_age_hours=min_age_hours)
+        self._auto_save_if_enabled()
+        return result
+
+    def analyze_consolidation(self):
+        """分析存储中的重复和相似情况（不修改数据）。
+
+        Returns:
+            分析结果字典
+        """
+        from agentmemory.consolidator import MemoryConsolidator
+        consolidator = MemoryConsolidator()
+        return consolidator.analyze(self.embedding_store)
+
+    # --- v0.8.0: 分析系统 ---
+
+    def analyze(self):
+        """生成综合记忆分析报告。
+
+        Returns:
+            MemoryReport 完整报告
+        """
+        from agentmemory.analytics import MemoryAnalyzer
+        analyzer = MemoryAnalyzer()
+        return analyzer.generate_report(
+            self.embedding_store.list_all(),
+            self.lifecycle,
+        )
+
+    def get_tag_cloud(self):
+        """获取标签云分析。
+
+        Returns:
+            TagCloud 分析结果
+        """
+        from agentmemory.analytics import MemoryAnalyzer
+        analyzer = MemoryAnalyzer()
+        return analyzer.analyze_tags(self.embedding_store.list_all())
+
+    def get_access_pattern(self):
+        """获取访问模式分析。
+
+        Returns:
+            AccessPattern 分析结果
+        """
+        from agentmemory.analytics import MemoryAnalyzer
+        analyzer = MemoryAnalyzer()
+        return analyzer.analyze_access_pattern(
+            self.embedding_store.list_all(),
+            self.lifecycle,
+        )
+
+    # --- v0.8.0: 命名空间 ---
+
+    def create_namespace(self, name: str, description: str = ""):
+        """创建命名空间。
+
+        Args:
+            name: 命名空间名称
+            description: 描述
+
+        Returns:
+            Namespace 实例
+        """
+        from agentmemory.namespace import NamespaceManager
+        if self._namespace_manager is None:
+            self._namespace_manager = NamespaceManager(
+                dimension=self._dimension,
+                use_lsh=self.embedding_store.use_lsh,
+            )
+        return self._namespace_manager.create(name, description=description)
+
+    def switch_namespace(self, name: str):
+        """切换当前命名空间。
+
+        Args:
+            name: 命名空间名称
+
+        Returns:
+            Namespace 实例
+        """
+        if self._namespace_manager is None:
+            raise RuntimeError("没有命名空间，请先调用 create_namespace()")
+        return self._namespace_manager.switch(name)
+
+    def list_namespaces(self) -> list:
+        """列出所有命名空间。
+
+        Returns:
+            命名空间统计列表
+        """
+        if self._namespace_manager is None:
+            return []
+        return self._namespace_manager.list_namespaces()
+
+    def cross_namespace_search(self, query_embedding: list, top_k: int = 5, threshold: float = 0.0, namespaces=None):
+        """跨命名空间搜索。
+
+        Args:
+            query_embedding: 查询向量
+            top_k: 每个命名空间返回的结果数
+            threshold: 相似度阈值
+            namespaces: 命名空间列表，None 表示全部
+
+        Returns:
+            合并后的搜索结果
+        """
+        if self._namespace_manager is None:
+            raise RuntimeError("没有命名空间，请先调用 create_namespace()")
+        return self._namespace_manager.cross_namespace_search(
+            query_embedding, top_k=top_k, threshold=threshold, namespaces=namespaces
+        )
+
+    # --- v0.8.0: 流式搜索 ---
+
+    def search_stream(self, query_embedding: list, top_k: int = 10, threshold: float = 0.0, tags=None, on_result=None, on_progress=None):
+        """流式搜索：逐步返回结果。
+
+        Args:
+            query_embedding: 查询向量
+            top_k: 返回前 k 个结果
+            threshold: 相似度阈值
+            tags: 标签过滤
+            on_result: 结果回调
+            on_progress: 进度回调
+
+        Returns:
+            SearchResult 迭代器
+        """
+        from agentmemory.streaming import StreamingSearcher
+        searcher = StreamingSearcher(
+            self.embedding_store,
+            on_progress=on_progress,
+            on_result=on_result,
+        )
+        return searcher.search_iter(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            threshold=threshold,
+            tags=tags,
+        )
+
+    async def search_async_stream(self, query_embedding: list, top_k: int = 10, threshold: float = 0.0, tags=None, batch_size: int = 1):
+        """异步流式搜索。
+
+        Args:
+            query_embedding: 查询向量
+            top_k: 返回前 k 个结果
+            threshold: 相似度阈值
+            tags: 标签过滤
+            batch_size: 每批大小
+
+        Returns:
+            异步搜索结果迭代器
+        """
+        from agentmemory.streaming import StreamingSearcher, StreamConfig
+        searcher = StreamingSearcher(self.embedding_store)
+        return searcher.search_aiter(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            threshold=threshold,
+            tags=tags,
+            config=StreamConfig(batch_size=batch_size),
+        )
+
+
 class MemorySession:
     """记忆会话上下文管理器。
 
@@ -1444,3 +1788,81 @@ class MemorySession:
     def compressed_search(self, *args, **kwargs):
         """代理 HybridMemory.compressed_search"""
         return self._memory.compressed_search(*args, **kwargs)
+
+    # --- v0.8.0 代理方法 ---
+
+    def create_snapshot(self, *args, **kwargs):
+        """代理 HybridMemory.create_snapshot"""
+        return self._memory.create_snapshot(*args, **kwargs)
+
+    def restore_snapshot(self, *args, **kwargs):
+        """代理 HybridMemory.restore_snapshot"""
+        return self._memory.restore_snapshot(*args, **kwargs)
+
+    def list_snapshots(self):
+        """代理 HybridMemory.list_snapshots"""
+        return self._memory.list_snapshots()
+
+    def diff_snapshots(self, *args, **kwargs):
+        """代理 HybridMemory.diff_snapshots"""
+        return self._memory.diff_snapshots(*args, **kwargs)
+
+    def delete_snapshot(self, *args, **kwargs):
+        """代理 HybridMemory.delete_snapshot"""
+        return self._memory.delete_snapshot(*args, **kwargs)
+
+    def deduplicate(self, *args, **kwargs):
+        """代理 HybridMemory.deduplicate"""
+        self._operations_count += 1
+        return self._memory.deduplicate(*args, **kwargs)
+
+    def merge_similar_memories(self, *args, **kwargs):
+        """代理 HybridMemory.merge_similar_memories"""
+        self._operations_count += 1
+        return self._memory.merge_similar_memories(*args, **kwargs)
+
+    def compress_aged_memories(self, *args, **kwargs):
+        """代理 HybridMemory.compress_aged_memories"""
+        self._operations_count += 1
+        return self._memory.compress_aged_memories(*args, **kwargs)
+
+    def analyze(self):
+        """代理 HybridMemory.analyze"""
+        return self._memory.analyze()
+
+    def get_tag_cloud(self):
+        """代理 HybridMemory.get_tag_cloud"""
+        return self._memory.get_tag_cloud()
+
+    def get_access_pattern(self):
+        """代理 HybridMemory.get_access_pattern"""
+        return self._memory.get_access_pattern()
+
+    def on_event(self, *args, **kwargs):
+        """代理 HybridMemory.on_event"""
+        return self._memory.on_event(*args, **kwargs)
+
+    @property
+    def event_bus(self):
+        """代理 HybridMemory.event_bus"""
+        return self._memory.event_bus
+
+    def create_namespace(self, *args, **kwargs):
+        """代理 HybridMemory.create_namespace"""
+        return self._memory.create_namespace(*args, **kwargs)
+
+    def switch_namespace(self, *args, **kwargs):
+        """代理 HybridMemory.switch_namespace"""
+        return self._memory.switch_namespace(*args, **kwargs)
+
+    def list_namespaces(self):
+        """代理 HybridMemory.list_namespaces"""
+        return self._memory.list_namespaces()
+
+    def cross_namespace_search(self, *args, **kwargs):
+        """代理 HybridMemory.cross_namespace_search"""
+        return self._memory.cross_namespace_search(*args, **kwargs)
+
+    def search_stream(self, *args, **kwargs):
+        """代理 HybridMemory.search_stream"""
+        return self._memory.search_stream(*args, **kwargs)

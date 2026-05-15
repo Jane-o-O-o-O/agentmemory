@@ -563,6 +563,108 @@ def cmd_visualize(args: argparse.Namespace) -> None:
     print("=" * 50)
 
 
+def cmd_config(args: argparse.Namespace) -> None:
+    """查看/管理配置"""
+    from agentmemory.config import AgentMemoryConfig, PROFILES, load_config
+
+    if args.config_action == "show":
+        if args.profile:
+            cfg = load_config(profile=args.profile, env_override=False)
+        else:
+            cfg = AgentMemoryConfig()
+        print(json.dumps(cfg.to_dict(), ensure_ascii=False, indent=2))
+    elif args.config_action == "profiles":
+        for name in PROFILES:
+            print(f"  {name}")
+    elif args.config_action == "validate":
+        if args.profile:
+            cfg = load_config(profile=args.profile, env_override=True)
+        else:
+            cfg = AgentMemoryConfig()
+        errors = cfg.validate()
+        if errors:
+            print(f"验证失败 ({len(errors)} 个错误):")
+            for e in errors:
+                print(f"  ✗ {e}")
+            sys.exit(1)
+        else:
+            print("✓ 配置验证通过")
+
+
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    """运行性能基准测试"""
+    from agentmemory.benchmarks import (
+        benchmark_embedding_store,
+        benchmark_knowledge_graph,
+        benchmark_lsh_index,
+        benchmark_hybrid_memory,
+        run_all,
+    )
+
+    dim = args.dimension
+    iters = args.iterations
+
+    if args.bench_target == "all":
+        suite = run_all(dimension=dim, iterations=iters)
+    elif args.bench_target == "vector":
+        suite = benchmark_embedding_store(dimension=dim, num_items=500, iterations=iters)
+    elif args.bench_target == "graph":
+        suite = benchmark_knowledge_graph(num_entities=200, num_relations=400, iterations=iters)
+    elif args.bench_target == "lsh":
+        suite = benchmark_lsh_index(dimension=dim, num_items=2000, iterations=iters)
+    elif args.bench_target == "hybrid":
+        suite = benchmark_hybrid_memory(dimension=dim, num_memories=100, iterations=iters)
+    else:
+        suite = run_all(dimension=dim, iterations=iters)
+
+    if args.format == "json":
+        print(json.dumps(suite.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(suite.summary())
+
+
+def cmd_gc(args: argparse.Namespace) -> None:
+    """运行垃圾回收"""
+    from agentmemory.gc import GarbageCollector, GCPolicy
+    from agentmemory.config import GCConfig
+
+    mem = _get_memory(args)
+    memories = mem.list_all()
+
+    policy = GCPolicy(
+        min_importance=args.min_importance,
+        max_age=args.max_age,
+        batch_size=args.batch_size,
+    )
+
+    gc = GarbageCollector(lifecycle=mem.lifecycle, policy=policy)
+
+    if args.gc_action == "preview":
+        result = gc.preview(memories)
+        print(f"预览 GC 结果:")
+        print(f"  将回收: {result.total_collected} 条记忆")
+        print(f"  将保留: {result.total_retained} 条记忆")
+        if result.reasons:
+            print(f"  回收原因:")
+            for mid, reason in list(result.reasons.items())[:20]:
+                print(f"    {mid[:12]}...: {reason}")
+    elif args.gc_action == "run":
+        ids_to_forget = []
+        result = gc.collect(memories)
+        for mid in result.collected:
+            try:
+                mem.forget(mid)
+                ids_to_forget.append(mid)
+            except KeyError:
+                pass
+        print(f"GC 完成:")
+        print(f"  已回收: {len(ids_to_forget)} 条记忆")
+        print(f"  耗时: {result.elapsed_ms:.1f}ms")
+    elif args.gc_action == "stats":
+        stats = gc.stats(memories)
+        print(json.dumps(stats, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。
 
@@ -739,6 +841,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--method", choices=["sq8", "pq"], default="sq8", help="量化方法")
     p.add_argument("--subspaces", type=int, default=8, help="PQ 子空间数量")
     p.set_defaults(func=cmd_compress)
+
+    # config
+    p = subparsers.add_parser("config", help="配置管理")
+    p.add_argument("config_action", choices=["show", "profiles", "validate"], help="操作类型")
+    p.add_argument("--profile", "-p", help="Profile 名称 (dev/test/prod)")
+    p.set_defaults(func=cmd_config)
+
+    # benchmark
+    p = subparsers.add_parser("benchmark", help="运行性能基准测试")
+    p.add_argument("bench_target", nargs="?", default="all", choices=["all", "vector", "graph", "lsh", "hybrid"], help="测试目标")
+    p.add_argument("--iterations", "-n", type=int, default=50, help="迭代次数")
+    p.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
+    p.set_defaults(func=cmd_benchmark)
+
+    # gc
+    p = subparsers.add_parser("gc", help="垃圾回收")
+    p.add_argument("gc_action", choices=["preview", "run", "stats"], help="操作类型")
+    p.add_argument("--min-importance", type=float, default=0.1, help="最低重要性阈值")
+    p.add_argument("--max-age", type=float, default=None, help="最大存活时间（秒）")
+    p.add_argument("--batch-size", type=int, default=100, help="每批清理数量")
+    p.set_defaults(func=cmd_gc)
 
     return parser
 

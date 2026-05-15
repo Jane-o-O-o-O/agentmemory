@@ -35,6 +35,10 @@
 | **CLI 工具** | 命令行管理记忆（含 interactive/batch-import/visualize/graph） |
 | **导入/导出** | JSON/CSV 格式数据迁移 |
 | **类型安全** | 完整类型注解 + dataclass 模型 |
+| **配置系统** | AgentMemoryConfig 集中化配置，支持 Profile + 环境变量覆盖 |
+| **中间件管道** | 可组合 pre/post hooks，内置计时/验证/限流/审计中间件 |
+| **垃圾回收** | 基于 TTL/重要性/访问模式的自动内存清理 |
+| **性能基准** | 内置 BenchmarkSuite，统计 ops/s 和 P50/P95/P99 延迟 |
 
 ---
 
