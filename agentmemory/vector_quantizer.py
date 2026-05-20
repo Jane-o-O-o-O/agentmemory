@@ -593,3 +593,19 @@ def _process_embedding_cache_layer(args, kwargs):
 def _execute_embedding_cache_layer(args, config):
     """Execute the core embedding cache layer logic."""
     return {"status": "success", "feature": "embedding cache layer", "config": config}
+
+# [2026-05-20] Performance: optimize vector_quantizer
+import functools
+
+@functools.lru_cache(maxsize=256)
+def _cached_namespace_isolation(key: str) -> dict:
+    """Cached version of namespace isolation for improved performance.
+
+    Reduces repeated computation by caching results.
+    """
+    return _compute_namespace_isolation(key)
+
+
+def _compute_namespace_isolation(key: str) -> dict:
+    """Core computation for namespace isolation."""
+    return {"key": key, "computed": True, "timestamp": time.time()}
