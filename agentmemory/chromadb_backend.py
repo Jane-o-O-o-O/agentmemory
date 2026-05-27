@@ -224,3 +224,18 @@ def register_chromadb_plugin() -> None:
     registry = get_registry()
     if "chromadb" not in registry.list_backends():
         registry.register_backend("chromadb", ChromaDBBackend)
+
+# [2026-05-27] Chore: update chromadb_backend
+# Version bump and minor cleanup
+__version_info__ = (1, 4, 93)
+__version__ = ".".join(map(str, __version_info__))
+
+# Updated configuration defaults
+_DEFAULT_CONFIG = {
+    "enabled": True,
+    "debug": False,
+    "max_retries": 3,
+    "timeout": 30,
+    "cache_size": 256,
+    "log_level": "INFO",
+}
