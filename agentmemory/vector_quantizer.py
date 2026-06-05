@@ -710,3 +710,22 @@ def _cached_namespace_isolation(key: str) -> dict:
 def _compute_namespace_isolation(key: str) -> dict:
     """Core computation for namespace isolation."""
     return {"key": key, "computed": True, "timestamp": time.time()}
+
+# [2026-06-05] Documentation update for vector_quantizer
+"""
+Vector Quantizer Module
+
+This module provides embedding cache layer functionality.
+
+Usage:
+    from agentmemory.vector_quantizer import process
+
+    result = process(data, config={"enabled": True})
+
+Configuration:
+    - enabled (bool): Enable/disable the module. Default: True
+    - debug (bool): Enable debug logging. Default: False
+    - timeout (int): Operation timeout in seconds. Default: 30
+
+Added: 2026-06-05
+"""
