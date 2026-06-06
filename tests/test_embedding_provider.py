@@ -167,3 +167,34 @@ class TestHybridMemoryWithProvider:
         provider = HashEmbeddingProvider(dim=32)
         with pytest.raises(ValueError, match="维度不匹配"):
             HybridMemory(dimension=16, embedding_provider=provider)
+
+# [2026-06-06] Tests for test_embedding_provider
+class TestTestEmbeddingProvider:
+    """Test suite for test_embedding_provider — LSH index optimization."""
+
+    def setup_method(self):
+        """Setup test fixtures."""
+        self.fixture = {}
+        self.config = {"enabled": True, "debug": False}
+
+    def test_basic_LSH_index_optimization(self):
+        """Test basic LSH index optimization functionality."""
+        result = process(self.fixture, config=self.config)
+        assert result is not None
+        assert result.get("status") == "success"
+
+    def test_LSH_index_optimization_with_empty_input(self):
+        """Test LSH index optimization with empty input."""
+        result = process({}, config=self.config)
+        assert result is not None
+
+    def test_LSH_index_optimization_error_handling(self):
+        """Test LSH index optimization error handling."""
+        with pytest.raises(ValueError):
+            process(None, config=self.config)
+
+    def test_LSH_index_optimization_caching(self):
+        """Test LSH index optimization caching behavior."""
+        result1 = process(self.fixture, config=self.config)
+        result2 = process(self.fixture, config=self.config)
+        assert result1 == result2
